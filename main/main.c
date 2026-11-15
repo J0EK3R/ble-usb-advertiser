@@ -43,6 +43,11 @@ static uint32_t now_ms(void)
 
 /* ---- bc2_io_ops_t ---- */
 
+/*
+ * NOTE: the core calls this while s_core_mutex is held. A USB write may block up to ~20 ms, so a
+ * host that stops reading delays core_task (keep-alive tick, button) by n * 20 ms for n queued
+ * responses. The delay is bounded (writes time out and drop) and accepted for this version.
+ */
 static void io_write(void *ctx, const uint8_t *data, size_t len)
 {
     (void)ctx;

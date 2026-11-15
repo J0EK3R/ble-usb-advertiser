@@ -2,8 +2,9 @@
  * @file board.h
  * @brief Pin assignment of the M5Stack AtomS3U (ESP32-S3FN8).
  *
- * All board specific values live here. They follow the M5Stack AtomS3U documentation and must be
- * double checked when the hardware arrives (see docs/hardware.md).
+ * All board specific values live here. UNVERIFIED: the pins were taken from memory, not from the
+ * schematic. Check them against the M5Stack AtomS3U schematic when the hardware arrives
+ * (see docs/hardware.md and docs/verification.md item 12).
  */
 #ifndef BC2_BOARD_H
 #define BC2_BOARD_H

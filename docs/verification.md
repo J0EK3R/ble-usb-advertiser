@@ -20,7 +20,7 @@ BLE scanner showing raw advertising data) and, for item 10, a real toy.
 | 8 | yes | 2 done | `bc2adv fuzz` | Valid PINGs between garbage/truncated/corrupt frames are still answered; `parse_errors` in PONG rises | |
 | 9 | yes | Windows 11 PC | Repeat 2-4 on Windows 11 with the tool (pyserial) | COM port works; DTR/RTS handling does not reset the chip | |
 | 10 | yes | Real toy, telegram from BC2 logs | `bc2adv hold` with the known telegram (24 byte Android layout) | The model reacts; it stops when the tool is killed | |
-| 11 | yes | 3 sets | Soak 30 min with 3 sets and 20 updates/s each (adapt `bench` or script `shell`) | No resets (uptime in PONG keeps growing), `parse_errors` stays 0 | |
+| 11 | yes | 3 sets | Soak 30 min with 3 sets and 20 updates/s each (adapt `bench` or script `shell`) | No resets (uptime in PONG keeps growing), `parse_errors` stays 0. Also exercises the NimBLE adapter races (restart_instance vs. op_stop, update fallback), which have no automated test | |
 | 12 | yes | - | Check pins in `board.h` against the board: LED on GPIO35, button on GPIO41 | LED colours as in README, button press recognised | |
 | 13 | yes | - | Record whether 5 instances really exist (HELLO `max_sets`) and whether `CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES = 4` builds/boots on the ESP32-S3 | `max_sets` = 5 | |
 

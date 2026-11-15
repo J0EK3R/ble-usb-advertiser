@@ -144,7 +144,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             portENTER_CRITICAL(&s_mux);
             s_connections++;
             portEXIT_CRITICAL(&s_mux);
-            ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            /* If the terminate request fails the link stays open and the connectable set stays
+             * down: tell the host instead of failing silently. */
+            if (ble_gap_terminate(event->connect.conn_handle, BLE_ERR_REM_USER_CONN_TERM) != 0) {
+                report_failure(id, BC2_STOP_DISCONNECT_FAILED);
+            }
         }
         break;
     case BLE_GAP_EVENT_DISCONNECT:
@@ -274,7 +278,9 @@ static bc2_status_t op_update(void *ctx, uint8_t id, uint16_t mfr_id, const uint
     }
     /* Fast path: change the data of the running instance (legal for legacy PDUs). */
     int rc = ble_gap_ext_adv_set_data(id, make_mbuf(ad, ad_len));
+    bool fallback_used = false;
     if (rc != 0) {
+        fallback_used = true;
         /* Fallback: some controllers refuse changes while enabled -> stop, set data, start. */
         s_fallback_updates++;
         rc = ble_gap_ext_adv_stop(id);
@@ -287,6 +293,11 @@ static bc2_status_t op_update(void *ctx, uint8_t id, uint16_t mfr_id, const uint
     }
     if (rc != 0) {
         *rc_out = rc16(rc);
+        if (fallback_used) {
+            /* The fallback may have stopped the instance already: the set is silent, so make the
+             * core drop the slot (EVT_SET_STOPPED) to keep PONG/active_mask truthful. */
+            report_failure(id, BC2_STOP_BLE_ERROR);
+        }
         return BC2_ERR_BLE_ERROR;
     }
     return BC2_OK;

@@ -1,7 +1,8 @@
 # Hardware notes: M5Stack AtomS3U
 
 Target board: M5Stack AtomS3U (ESP32-S3FN8, 8 MB flash, no PSRAM, USB-A plug). **Not available during
-development**: everything below follows the manufacturer documentation and must be verified when the
+development**: everything below is UNVERIFIED (pins were taken from memory, not from the schematic) and must be
+checked against the schematic when the
 board arrives (see `verification.md`).
 
 | Item | Value | Where in the code |
@@ -22,7 +23,8 @@ product owner for version 1.
 
 ## Reset and download mode
 
-- Hold the button while plugging in the stick to enter the ROM download mode (needed if flashing from
+- Hold the button while plugging in the stick to enter the ROM download mode (UNVERIFIED, not yet
+  tested on the board; needed if flashing from
   `idf.py flash` cannot find the port, for example after a crash loop).
 - The host must keep DTR and RTS de-asserted. The USB Serial/JTAG peripheral interprets certain DTR/RTS
   sequences as "reset" or "enter bootloader" (this is how esptool works).

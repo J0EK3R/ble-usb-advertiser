@@ -33,7 +33,7 @@ Contents: 1 Transport, 2 Frame format, 3 Message types, 4 Requests, 5 Responses 
 - `CRC16` = CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, xorout 0) over
   `LEN, TYPE, SEQ, PAYLOAD`, transmitted low byte first. Check value of ASCII `123456789` is `0x29B1`.
 - `SEQ`: chosen by the host per request (wraps at 255); the device copies it into the response.
-  Events use SEQ 0, so hosts should not use 0 for requests.
+  Events use SEQ 0, so hosts must not use 0 for requests and must not rely on SEQ to match events.
 
 Parser rules (device and host, identical):
 
@@ -132,6 +132,8 @@ Resets the keep-alive timer (any valid frame does; PING is the cheapest). Respon
 - Implemented as an in-place data update of the running instance (no stop/start); the new data goes
   out with the next advertising event. Response `ACK(SET_UPDATE, OK, extra = processing_time_us u32)`:
   time from the start of handling the frame to the controller having accepted the data.
+  With `BLE_ERROR` the ACK extra is `rc u16` (NimBLE return code), as for SET_START; the set may then be
+  silent, in which case the device also emits `EVT_SET_STOPPED` and frees the slot.
 - Updates are applied in arrival order. The host need not wait for the ACK before sending the next
   update but should coalesce (latest wins) when ACKs lag.
 

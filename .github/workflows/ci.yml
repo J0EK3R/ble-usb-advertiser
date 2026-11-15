@@ -39,7 +39,7 @@ jobs:
         with:
           esp_idf_version: ${{ env.IDF_VERSION }}
           target: esp32s3
-          command: cd build && esptool.py --chip esp32s3 merge_bin -o bc2-usb-advertiser-merged.bin @flash_args
+          command: bash -c "cd build && esptool.py --chip esp32s3 merge_bin -o bc2-usb-advertiser-merged.bin @flash_args"
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
