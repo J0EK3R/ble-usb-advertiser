@@ -390,6 +390,74 @@ static void test_async_failure(void)
     ASSERT_EQ(BC2_LED_ERROR, bc2_core_led_state(&env.core, 10));
 }
 
+/**
+ * Update failure sequence (review M1): SET_UPDATE fails in the BLE layer and the
+ * adapter reports the set as dead asynchronously. Expected core behaviour:
+ *  1. the ACK carries BLE_ERROR + rc, the slot is still marked running;
+ *  2. the next tick emits exactly one EVT_SET_STOPPED(set, BLE_ERROR) + LED ERROR;
+ *  3. PONG shows the set's bit cleared in active_mask;
+ *  4. a further tick emits nothing and a later SET_UPDATE answers SET_NOT_FOUND.
+ */
+static void test_update_failure_sequence(void)
+{
+    fake_env_t env;
+    bc2_frame_t fr;
+    const uint8_t p[8] = {3, 0xF0, 0xFF, 4, 9, 9, 9, 9};
+    fake_init(&env);
+    fake_hello(&env, 1000);
+    fake_start(&env, 3, 0xFFF0, DATA8, 8);
+    fake_clear(&env);
+
+    env.update_result = BC2_ERR_BLE_ERROR;                      /* the update fails ... */
+    env.error_rc = 0x0102;
+    fake_send(&env, BC2_MSG_SET_UPDATE, p, 8);
+    ASSERT_TRUE(fake_out_frame(&env, 0, &fr));
+    ASSERT_EQ(BC2_MSG_ACK, fr.type);
+    ASSERT_EQ(BC2_ERR_BLE_ERROR, fr.payload[1]);
+    ASSERT_EQ(0x0102, fr.payload[2] | (fr.payload[3] << 8));    /* rc u16 */
+
+    env.failure_pending = true;                                 /* ... and the BLE layer flags the slot */
+    env.failure_set = 3;
+    env.failure_reason = BC2_STOP_BLE_ERROR;
+    fake_clear(&env);
+    bc2_core_tick(&env.core, 10);
+    ASSERT_EQ(1, fake_out_count(&env));
+    ASSERT_TRUE(fake_out_frame(&env, 0, &fr));
+    ASSERT_EQ(BC2_MSG_EVT_SET_STOPPED, fr.type);
+    ASSERT_EQ(3, fr.payload[0]);
+    ASSERT_EQ(BC2_STOP_BLE_ERROR, fr.payload[1]);
+    ASSERT_EQ(BC2_LED_ERROR, bc2_core_led_state(&env.core, 10));
+
+    fake_clear(&env);
+    fake_send(&env, BC2_MSG_PING, NULL, 0);                     /* bit 3 of active_mask must be gone */
+    ASSERT_TRUE(fake_out_frame(&env, 0, &fr));
+    ASSERT_EQ(BC2_MSG_PONG, fr.type);
+    ASSERT_EQ(0, fr.payload[0]);                                /* state: nothing advertising */
+    ASSERT_EQ(0, fr.payload[1] | (fr.payload[2] << 8));
+
+    fake_clear(&env);
+    bc2_core_tick(&env.core, 20);                               /* failure was consumed: no second event */
+    ASSERT_EQ(0, fake_out_count(&env));
+
+    env.update_result = BC2_OK;
+    fake_send(&env, BC2_MSG_SET_UPDATE, p, 8);                  /* slot is gone now */
+    ASSERT_ACK(&env, 0, BC2_MSG_SET_UPDATE, BC2_ERR_SET_NOT_FOUND);
+}
+
+/** A failure reported for a slot that is already stopped is consumed silently. */
+static void test_failure_on_stopped_slot(void)
+{
+    fake_env_t env;
+    fake_init(&env);
+    fake_hello(&env, 1000);
+    fake_clear(&env);
+    env.failure_pending = true;                                 /* set 3 was never started */
+    env.failure_set = 3;
+    env.failure_reason = BC2_STOP_BLE_ERROR;
+    bc2_core_tick(&env.core, 10);
+    ASSERT_EQ(0, fake_out_count(&env));
+}
+
 /** Parse errors turn the LED to ERROR for 2 s; BOOT and NO_HOST depend on BLE readiness. */
 static void test_led_states(void)
 {
@@ -427,5 +495,7 @@ void run_core_tests(void)
     RUN_TEST(test_button);
     RUN_TEST(test_stop_failure_hard_reset);
     RUN_TEST(test_async_failure);
+    RUN_TEST(test_update_failure_sequence);
+    RUN_TEST(test_failure_on_stopped_slot);
     RUN_TEST(test_led_states);
 }
