@@ -449,7 +449,7 @@ def cmd_bench(args):
 def cmd_fuzz(args):
     """Interleave garbage, truncated and corrupted frames with valid PINGs; PINGs must still work."""
     link, caps = open_link(args)
-    good = bad = 0
+    good = bad = errors = 0
     junk = [b"\x00\xff\x13garbage", encode(Frame(MSG_PING, 1))[:-1],
             bytes([SOF, 0x01, 0x02]), bytes([SOF, 0x3F]) + bytes(70),
             encode(Frame(MSG_PING, 2))[:-1] + b"\x00"]
