@@ -237,8 +237,27 @@ static void test_max_data_len(void)
     ASSERT_EQ(27, bc2_max_data_len(0x00));
 }
 
+/** AD payload layout: flags field + manufacturer data, limits 31 bytes. */
+static void test_build_adv_data(void)
+{
+    uint8_t out[BC2_LEGACY_ADV_MAX];
+    uint8_t big[27] = {0};
+    const uint8_t data[2] = {0xAA, 0xBB};
+    const uint8_t with_flags[] = {0x02, 0x01, 0x06, 0x05, 0xFF, 0xF0, 0xFF, 0xAA, 0xBB};
+    const uint8_t no_flags[] = {0x05, 0xFF, 0x00, 0xC2, 0xAA, 0xBB};
+    ASSERT_EQ(sizeof(with_flags), bc2_build_adv_data(0x01, 0xFFF0, data, 2, out));
+    ASSERT_MEM_EQ(with_flags, out, sizeof(with_flags));
+    ASSERT_EQ(sizeof(no_flags), bc2_build_adv_data(0x00, 0xC200, data, 2, out));
+    ASSERT_MEM_EQ(no_flags, out, sizeof(no_flags));
+    ASSERT_EQ(31, bc2_build_adv_data(0x01, 0x1234, big, 24, out));    /* full legacy PDU */
+    ASSERT_EQ(31, bc2_build_adv_data(0x00, 0x1234, big, 27, out));
+    ASSERT_EQ(0, bc2_build_adv_data(0x01, 0x1234, big, 25, out));
+    ASSERT_EQ(4, bc2_build_adv_data(0x00, 0x1234, NULL, 0, out));     /* empty payload */
+}
+
 void run_codec_tests(void)
 {
+    RUN_TEST(test_build_adv_data);
     RUN_TEST(test_decode_hello);
     RUN_TEST(test_decode_set_start);
     RUN_TEST(test_decode_set_start_lengths);

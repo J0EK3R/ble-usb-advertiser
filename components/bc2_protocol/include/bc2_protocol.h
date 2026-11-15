@@ -236,6 +236,21 @@ bc2_status_t bc2_decode_empty(const bc2_frame_t *f);
 /** Maximum raw data length allowed for a set started with @p flags. */
 uint8_t bc2_max_data_len(uint8_t flags);
 
+/** Size of a legacy advertising payload in bytes. */
+#define BC2_LEGACY_ADV_MAX 31u
+
+/**
+ * Build the advertising data of a set: optional flags field `02 01 06` followed by one
+ * manufacturer specific data structure `len FF mfr_lo mfr_hi data...`.
+ * @param flags  SET_START flag byte (only the AD flags bit is evaluated)
+ * @param mfr_id manufacturer id (little endian on air)
+ * @param data   raw manufacturer data
+ * @param len    number of raw bytes, must fit bc2_max_data_len(flags)
+ * @param out    buffer of at least BC2_LEGACY_ADV_MAX bytes
+ * @return bytes written, 0 if @p len is too large
+ */
+size_t bc2_build_adv_data(uint8_t flags, uint16_t mfr_id, const uint8_t *data, uint8_t len, uint8_t *out);
+
 /* ------------------------------------------------------------------------- */
 /* Responses and events                                                       */
 /* ------------------------------------------------------------------------- */

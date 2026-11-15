@@ -38,6 +38,27 @@ uint8_t bc2_max_data_len(uint8_t flags)
     return (flags & BC2_FLAG_ADD_AD_FLAGS) ? BC2_MAX_DATA_WITH_FLAGS : BC2_MAX_DATA_NO_FLAGS;
 }
 
+size_t bc2_build_adv_data(uint8_t flags, uint16_t mfr_id, const uint8_t *data, uint8_t len, uint8_t *out)
+{
+    if (len > bc2_max_data_len(flags)) {
+        return 0;
+    }
+    size_t n = 0;
+    if (flags & BC2_FLAG_ADD_AD_FLAGS) {
+        out[n++] = 0x02;      /* AD structure length */
+        out[n++] = 0x01;      /* AD type: flags */
+        out[n++] = 0x06;      /* LE general discoverable, BR/EDR not supported (as Android adds) */
+    }
+    out[n++] = (uint8_t)(len + 3u);              /* AD length: type + 2 byte company id + data */
+    out[n++] = 0xFF;                             /* AD type: manufacturer specific data */
+    out[n++] = (uint8_t)(mfr_id & 0xFFu);
+    out[n++] = (uint8_t)(mfr_id >> 8);
+    if (len > 0) {
+        memcpy(&out[n], data, len);
+    }
+    return n + len;
+}
+
 /* ---- request decoding ---- */
 
 bc2_status_t bc2_decode_empty(const bc2_frame_t *f)
