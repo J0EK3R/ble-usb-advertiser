@@ -1,0 +1,32 @@
+# All non-default Kconfig options of the firmware (sdkconfig itself is not committed).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Bluetooth: NimBLE host, BLE 5 extended advertising API used with legacy PDUs only.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_EXT_ADV=y
+# 4 additional instances + 1 mandatory = 5 simultaneous advertising sets.
+CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=4
+# Only legacy (31 byte) data is ever used, keep the extended buffers small.
+CONFIG_BT_NIMBLE_EXT_ADV_MAX_SIZE=64
+CONFIG_BT_NIMBLE_ENABLE_PERIODIC_ADV=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Broadcaster + peripheral (peripheral is required for connectable ADV_IND).
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+
+# The USB Serial/JTAG port carries only protocol frames: no console, no logs.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+
+# Task watchdog: USB and core tasks subscribe, a hang resets the chip (= silence).
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5

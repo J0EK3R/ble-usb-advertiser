@@ -1,0 +1,18 @@
+menu "BC2 USB Advertiser"
+
+    config BC2ADV_MAX_SETS
+        int "Maximum number of simultaneous advertising sets"
+        range 1 5
+        default 5
+        help
+            Upper limit reported in HELLO_RSP. The effective value is
+            min(this, CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES + 1).
+
+    config BC2ADV_LED_BRIGHTNESS
+        int "RGB LED brightness (0..255)"
+        range 1 255
+        default 20
+        help
+            The WS2812 LED is very bright, so the channel values are scaled.
+
+endmenu
