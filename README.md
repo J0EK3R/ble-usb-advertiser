@@ -10,6 +10,56 @@ host disappears (keep-alive timeout) or the button is pressed.
 - Hardware notes: [`docs/hardware.md`](docs/hardware.md)
 - Manual hardware checklist (not yet executed, no stick was available): [`docs/verification.md`](docs/verification.md)
 
+## Quick start: flash the firmware with the browser (no toolchain needed)
+
+Works on Windows, Linux and macOS with **Chrome or Edge**. The browser needs WebSerial, which
+Firefox and Safari do not provide.
+
+1. **Download the firmware image.**
+   - Open the latest successful [CI run on `main`](https://github.com/J0EK3R/ble-usb-advertiser/actions/workflows/ci.yml?query=branch%3Amain+is%3Asuccess).
+     You must be signed in to GitHub to download artifacts, and artifacts expire after 90 days.
+   - Download the artifact **`bc2-usb-advertiser-firmware`** and unzip it.
+   - You only need **`bc2-usb-advertiser-merged.bin`**. It is a single image with the bootloader, the
+     partition table and the app.
+2. **Plug in the stick.** On Windows it shows up as one "USB Serial Device (COMx)" with hardware id
+   `VID_303A&PID_1001&MI_00`. A second entry "USB JTAG/serial debug unit" is the debug interface and
+   not a COM port.
+3. **Flash it with one of these web flashers:**
+   - **ESP Launchpad** (by Espressif): <https://espressif.github.io/esp-launchpad/>
+     1. Select the **DIY** tab.
+     2. Click **Connect** and choose the stick's port (`303A:1001`).
+     3. Add the file `bc2-usb-advertiser-merged.bin` with flash address **`0x0`**.
+     4. Click **Program**.
+   - **ESPHome Web**: <https://web.esphome.io/>
+     1. Click **Connect** and choose the port.
+     2. Click **Install** and pick `bc2-usb-advertiser-merged.bin`. It is written to address `0x0`
+        automatically. The file does not have to be an ESPHome firmware.
+   - The address must be **`0x0`**, because the merged image starts with the bootloader. Any other
+     address leaves the stick unbootable until it is flashed again correctly.
+   - A successful run ends with `Wrote 500832 bytes ... at 0x0` (the size depends on the version)
+     and `Leaving...`. The message "Not changing the image" is only information.
+4. **Unplug the stick and plug it in again.** The LED first shows white (boot) and then **blinks blue
+   once per second**: the firmware runs and waits for a host. See [LED states](#led-states).
+5. **Check the stick with the host tool.** This needs Python 3. Download
+   [`tools/bc2adv.py`](tools/bc2adv.py) first.
+   ```
+   pip install pyserial
+   python bc2adv.py ports                     # lists candidate ports
+   python bc2adv.py --port COM9 hello         # LED turns green, prints version and max sets
+   python bc2adv.py --port COM9 hold --data 0102030405060708 --seconds 10   # LED pulses cyan
+   ```
+   While `hold` runs, a BLE scanner such as nRF Connect shows manufacturer data `0xFFF0` with the
+   payload `0102030405060708`.
+
+**Troubleshooting**
+
+- **Connect fails, or no port shows up:** hold the stick's button while plugging it in. This starts
+  the ROM download mode. Then connect again. In download mode Windows may assign a different COM number.
+  A stick with factory firmware usually connects without this step.
+- **Flashing aborts:** choose a lower baud rate, for example 115200, before you click Connect.
+- **Two COM ports with the same `VID_303A&PID_1001`:** another ESP32-S3/C3 board is attached. In a VM,
+  the stick may also be passed through twice. Unplug the stick to see which port is its own.
+
 ## Features
 
 - Up to 5 simultaneous advertising sets (reported in `HELLO_RSP`), each with its own interval, TX power,
