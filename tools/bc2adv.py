@@ -150,8 +150,9 @@ class Decoder:
 # ---------------------------------------------------------------------------
 # Message builders / parsers
 # ---------------------------------------------------------------------------
-def hello_payload(keepalive_ms=0):
-    return struct.pack("<BBH", PROTO_MAJOR, PROTO_MINOR, keepalive_ms)
+def hello_payload(keepalive_ms=0, minor=PROTO_MINOR):
+    """HELLO request: proto_major(1) proto_minor(1) keepalive_ms(2)."""
+    return struct.pack("<BBH", PROTO_MAJOR, minor, keepalive_ms)
 
 
 def set_start_payload(set_id, mfr, data, interval=32, tx=127, add_flags=True, pdu="ind"):
@@ -265,8 +266,10 @@ def parse_read_rsp(payload):
 
 def parse_gatt_status(payload):
     scanning, connecting, connected, dropped_scan, dropped_notify = struct.unpack("<BHHHH", payload[:9])
+    free_heap, min_free_heap = struct.unpack_from("<II", payload, 9) if len(payload) >= 17 else (0, 0)
     return {"scanning": bool(scanning), "connecting_mask": connecting, "connected_mask": connected,
-            "dropped_scan": dropped_scan, "dropped_notify": dropped_notify}
+            "dropped_scan": dropped_scan, "dropped_notify": dropped_notify,
+            "free_heap": free_heap, "min_free_heap": min_free_heap}
 
 
 def parse_event(frame):
@@ -335,7 +338,16 @@ def parse_pong(payload):
 # Serial link (needs pyserial)
 # ---------------------------------------------------------------------------
 class DeviceError(Exception):
-    """The device answered with a non-OK status or did not answer."""
+    """The device answered with a non-OK status or did not answer.
+
+    `status` is the protocol status code (None if there was no answer), `extra` the ACK extra bytes
+    (for ATT_ERROR: the ATT error code, for BLE_ERROR: the NimBLE rc).
+    """
+
+    def __init__(self, message, status=None, extra=b""):
+        super().__init__(message)
+        self.status = status
+        self.extra = extra
 
 
 class Link:
@@ -416,16 +428,25 @@ class Link:
             raise DeviceError("not a BC2 advertiser (response 0x%02X)" % frame.type)
         return caps
 
-    def command(self, type_, payload=b""):
-        """Request that must be answered with ACK(OK); returns (extra bytes, rtt)."""
-        frame, rtt = self.request(type_, payload, retries=2)
+    def command(self, type_, payload=b"", timeout=0.1, retries=2):
+        """Request that must be answered with ACK(OK); returns (extra bytes, rtt).
+
+        Advertising requests are idempotent and may be retransmitted. GATT requests must NOT be
+        (retries=0): a duplicate write would be executed twice (docs/protocol.md section 14).
+        """
+        frame, rtt = self.request(type_, payload, timeout, retries)
         if frame.type != MSG_ACK:
             return frame.payload, rtt
         status = frame.payload[1]
         if status != 0:
             raise DeviceError("%s (0x%02X): %s" % (STATUS_NAMES.get(status, status), type_,
-                                                   frame.payload[2:].hex()))
+                                                   frame.payload[2:].hex()), status=status,
+                              extra=bytes(frame.payload[2:]))
         return frame.payload[2:], rtt
+
+    def gatt(self, type_, payload=b"", timeout=6.0):
+        """GATT request: no retransmission, waits up to 6 s (the stick answers within 5 s)."""
+        return self.command(type_, payload, timeout, 0)
 
     def close(self):
         self.running = False
@@ -635,6 +656,485 @@ def cmd_fuzz(args):
     return 0 if bad == 0 else 1
 
 
+# ---------------------------------------------------------------------------
+# GATT central session (protocol 1.1)
+# ---------------------------------------------------------------------------
+def latency_stats(values):
+    """Summary of a list of latencies: count, min, mean, median, p95, max (same unit as the input)."""
+    if not values:
+        return {"count": 0}
+    ordered = sorted(values)
+    return {"count": len(ordered), "min": ordered[0], "mean": sum(ordered) / len(ordered),
+            "p50": ordered[len(ordered) // 2], "p95": ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))],
+            "max": ordered[-1]}
+
+
+def format_stats(stats, unit="ms"):
+    """One line text for latency_stats()."""
+    if not stats["count"]:
+        return "no samples"
+    return "n=%d min/mean/p50/p95/max = %.2f/%.2f/%.2f/%.2f/%.2f %s" % (
+        stats["count"], stats["min"], stats["mean"], stats["p50"], stats["p95"], stats["max"], unit)
+
+
+def format_event(ev):
+    """Human readable text of a parse_event() dict."""
+    name = ev["name"]
+    if name == "SCAN_REPORT":
+        return "SCAN %s type %d rssi %d%s%s data %s" % (
+            ev["addr"], ev["addr_type"], ev["rssi"], " conn" if ev["connectable"] else "",
+            " rsp" if ev["scan_rsp"] else "", ev["data"].hex())
+    if name == "NOTIFY":
+        return "NOTIFY conn %d handle 0x%04X%s%s data %s" % (
+            ev["conn_id"], ev["handle"], " (indication)" if ev["indication"] else "",
+            " (truncated)" if ev["truncated"] else "", ev["data"].hex())
+    if name == "DISCONNECTED":
+        return "DISCONNECTED conn %d %s reason 0x%02X %s" % (
+            ev["conn_id"], "after connect" if ev["phase"] else "while connecting", ev["reason"],
+            DISCONNECT_REASONS.get(ev["reason"], ""))
+    return "%s %s" % (name, {k: v for k, v in ev.items() if k != "name"})
+
+
+class GattSession:
+    """Event-driven GATT client on top of a Link: tracks scan results, connections, discovery
+    results and notifications, and offers blocking helpers for every request of protocol 1.1."""
+
+    def __init__(self, link, caps, echo=None):
+        self.link, self.caps, self.echo = link, caps, echo
+        self.cond = threading.Condition()
+        self.adv = AdvMerger()
+        self.connected, self.disconnected = {}, {}
+        self.services, self.chars, self.discovery = {}, {}, {}
+        self.notifications = {}          # conn_id -> number of EVT_NOTIFY seen
+        self.dropped = {"scan": 0, "notify": 0}
+        self.scan_stopped = None
+        self.running = True
+        self.thread = threading.Thread(target=self._pump, daemon=True)
+        self.thread.start()
+        if not caps.get("gatt_flags", 0) & 2:
+            raise DeviceError("this firmware has no GATT central support (proto %s)" % caps["proto"])
+
+    def close(self):
+        self.running = False
+        self.thread.join(timeout=1)
+
+    def _pump(self):
+        """Consume link events and update the session state."""
+        while self.running:
+            try:
+                frame = self.link.events.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            ev = parse_event(frame)
+            with self.cond:
+                self._apply(ev)
+                self.cond.notify_all()
+            if self.echo:
+                self.echo(ev)
+
+    def _apply(self, ev):
+        """Update the state from one event (caller holds the condition lock)."""
+        name, conn = ev["name"], ev.get("conn_id")
+        if name == "SCAN_REPORT":
+            self.adv.update(ev)
+        elif name == "CONNECTED":
+            self.connected[conn] = ev
+            self.disconnected.pop(conn, None)
+        elif name == "DISCONNECTED":
+            self.connected.pop(conn, None)
+            self.disconnected[conn] = ev
+        elif name == "SERVICE":
+            self.services.setdefault(conn, []).append(ev)
+        elif name == "CHAR":
+            self.chars.setdefault(conn, []).append(ev)
+        elif name == "DISCOVER_DONE":
+            self.discovery[conn] = ev
+        elif name == "NOTIFY":
+            self.notifications[conn] = self.notifications.get(conn, 0) + 1
+        elif name == "DROPPED":
+            self.dropped[ev["kind"]] += ev["count"]
+        elif name == "SCAN_STOPPED":
+            self.scan_stopped = ev
+
+    def wait_for(self, predicate, timeout):
+        """Block until predicate() is true (evaluated under the lock) or the timeout expires."""
+        with self.cond:
+            return self.cond.wait_for(predicate, timeout)
+
+    # ---- requests ----
+    def scan_start(self, active=True, duplicates=False, interval=0, window=0, refresh_ms=0):
+        self.link.gatt(MSG_SCAN_START, scan_start_payload(active, duplicates, interval, window, refresh_ms))
+
+    def scan_stop(self):
+        self.link.gatt(MSG_SCAN_STOP)
+
+    def connect(self, conn_id, addr, addr_type=ADDR_AUTO, background=False, timeout_ms=0, wait=15.0,
+                itvl_min=0, itvl_max=0):
+        """Send CONNECT and wait for EVT_CONNECTED; raises DeviceError if the attempt ends otherwise."""
+        with self.cond:
+            self.connected.pop(conn_id, None)
+            self.disconnected.pop(conn_id, None)
+        self.link.gatt(MSG_CONNECT, connect_payload(conn_id, addr_to_bytes(addr), addr_type, background,
+                                                    timeout_ms, itvl_min, itvl_max))
+        if not self.wait_for(lambda: conn_id in self.connected or conn_id in self.disconnected, wait):
+            raise DeviceError("connect to %s: no result within %.0f s" % (addr, wait))
+        if conn_id in self.disconnected:
+            raise DeviceError("connect to %s failed: %s" % (addr, format_event(self.disconnected[conn_id])))
+        return self.connected[conn_id]
+
+    def disconnect(self, conn_id, wait=3.0):
+        self.link.gatt(MSG_DISCONNECT, conn_id_payload(conn_id))
+        self.wait_for(lambda: conn_id not in self.connected, wait)
+
+    def discover(self, conn_id, wait=20.0):
+        """Run full discovery; returns (services, characteristics) as lists of event dicts."""
+        with self.cond:
+            self.services[conn_id], self.chars[conn_id] = [], []
+            self.discovery.pop(conn_id, None)
+        self.link.gatt(MSG_DISCOVER, conn_id_payload(conn_id))
+        if not self.wait_for(lambda: conn_id in self.discovery, wait):
+            raise DeviceError("discovery: no EVT_DISCOVER_DONE within %.0f s" % wait)
+        done = self.discovery[conn_id]
+        if done["status"] != 0:
+            raise DeviceError("discovery failed: %s" % STATUS_NAMES.get(done["status"], done["status"]))
+        return self.services[conn_id], self.chars[conn_id]
+
+    def read(self, conn_id, handle):
+        """READ; returns (parsed READ_RSP dict, round trip in seconds)."""
+        payload, rtt = self.link.gatt(MSG_READ, read_payload(conn_id, handle))
+        return parse_read_rsp(payload), rtt
+
+    def write(self, conn_id, handle, data, response=True):
+        """WRITE (response=True) or WRITE_CMD; returns the round trip to the ACK in seconds."""
+        _, rtt = self.link.gatt(MSG_WRITE if response else MSG_WRITE_CMD, write_payload(conn_id, handle, data))
+        return rtt
+
+    def subscribe(self, conn_id, cccd_handle, mode=1):
+        self.link.gatt(MSG_SUBSCRIBE, subscribe_payload(conn_id, cccd_handle, mode))
+
+    def gatt_status(self):
+        frame, _ = self.link.request(MSG_GET_GATT_STATUS, retries=0, timeout=1.0)
+        return parse_gatt_status(frame.payload)
+
+    def set_failsafe(self, conn_id, slot, handle, data):
+        self.link.gatt(MSG_SET_FAILSAFE, set_failsafe_payload(conn_id, slot, handle, data))
+
+    def ensure_seen(self, addr, timeout=8.0):
+        """Scan until `addr` was reported (fills the stick's address type cache), then stop the scan."""
+        self.scan_start(active=True)
+        try:
+            return self.wait_for(lambda: addr.upper() in self.adv.devices, timeout)
+        finally:
+            self.scan_stop()
+
+
+def print_discovery(services, chars):
+    """Print the service/characteristic tree of a discovery result."""
+    for svc in services:
+        print("service %s  handles 0x%04X-0x%04X" % (svc["uuid"], svc["start"], svc["end"]))
+        for ch in chars:
+            if svc["start"] <= ch["value_handle"] <= svc["end"]:
+                props = [n for bit, n in ((0x02, "read"), (0x04, "write-no-rsp"), (0x08, "write"),
+                                          (0x10, "notify"), (0x20, "indicate")) if ch["props"] & bit]
+                print("  char %s  value 0x%04X  cccd %s  [%s]" % (
+                    ch["uuid"], ch["value_handle"],
+                    "0x%04X" % ch["cccd_handle"] if ch["cccd_handle"] else "-", ",".join(props)))
+
+
+def open_gatt(args, echo=None):
+    """Open the link, start the keep-alive thread and return (link, caps, session, stop_event)."""
+    link, caps = open_link(args)
+    stop_event = threading.Event()
+    threading.Thread(target=keepalive_loop, args=(link, caps, stop_event), daemon=True).start()
+    try:
+        return link, caps, GattSession(link, caps, echo), stop_event
+    except DeviceError:
+        stop_event.set()
+        link.close()
+        raise
+
+
+def close_gatt(link, session, stop_event):
+    """Leave the stick clean: stop scan, drop links (HELLO of the next tool run would do it too)."""
+    stop_event.set()
+    session.running = False
+    for conn_id in list(session.connected):
+        try:
+            session.disconnect(conn_id, wait=1.0)
+        except DeviceError:
+            pass
+    try:
+        link.command(MSG_STOP_ALL)
+        link.gatt(MSG_SCAN_STOP)
+    except DeviceError:
+        pass
+    link.close()
+
+
+def connect_for(args, session):
+    """Connect conn 0 to args.addr; runs a short scan first so the address type is known."""
+    if args.addr_type == "auto" and not args.no_scan:
+        if not session.ensure_seen(args.addr.upper()):
+            print("warning: %s not seen in the scan, trying a public address" % args.addr, file=sys.stderr)
+    types = {"auto": ADDR_AUTO, "public": 0, "random": 1}
+    info = session.connect(0, args.addr, types[args.addr_type], args.background, args.timeout)
+    print("connected: mtu %d, interval %.2f ms" % (info["mtu"], info["itvl"] * 1.25))
+    return info
+
+
+def cmd_scan(args):
+    """Scan for advertisers and print the merged result (ADV + SCAN_RSP per address)."""
+    link, caps, session, stop = open_gatt(args, echo=(lambda ev: print(format_event(ev))) if args.raw else None)
+    try:
+        session.scan_start(not args.passive, args.duplicates, args.interval, args.window, args.refresh)
+        time.sleep(args.seconds)
+        session.scan_stop()
+        time.sleep(0.3)
+        for rec in sorted(session.adv.devices.values(), key=lambda r: -r["rssi"]):
+            if args.name and args.name.lower() not in rec["name"].lower():
+                continue
+            if args.mfr is not None and rec["mfr_id"] != args.mfr:
+                continue
+            services = [uuid_text(v[i:i + 16]) for t, v in rec["ad"].items() if t in (0x06, 0x07)
+                        for i in range(0, len(v) - 15, 16)]
+            print("%s type %d rssi %4d %s name %-16r mfr %s services %s" % (
+                rec["addr"], rec["addr_type"], rec["rssi"], "conn" if rec.get("connectable") else "    ",
+                rec["name"], "0x%04X" % rec["mfr_id"] if rec["mfr_id"] is not None else "-", services))
+        print("dropped reports: %d, stick status: %s" % (session.dropped["scan"], session.gatt_status()))
+    finally:
+        close_gatt(link, session, stop)
+
+
+def cmd_connect(args):
+    """Connect, optionally discover / subscribe, then hold the link and print events."""
+    link, caps, session, stop = open_gatt(args, echo=lambda ev: print(format_event(ev)) if ev["name"] == "NOTIFY" else None)
+    try:
+        connect_for(args, session)
+        if args.discover:
+            print_discovery(*session.discover(0))
+        for cccd in args.notify or []:
+            session.subscribe(0, cccd)
+            print("subscribed to 0x%04X" % cccd)
+        deadline = time.monotonic() + args.hold
+        while time.monotonic() < deadline and 0 in session.connected:
+            time.sleep(0.1)
+        print("link %s" % ("still up" if 0 in session.connected else "lost: " + format_event(session.disconnected[0])))
+    except KeyboardInterrupt:
+        print("interrupted")
+    finally:
+        close_gatt(link, session, stop)
+
+
+def cmd_gatt_oneshot(args):
+    """discover / read / write / write-cmd / notify against one address (connect, act, disconnect)."""
+    link, caps, session, stop = open_gatt(args, echo=lambda ev: print(format_event(ev)) if ev["name"] == "NOTIFY" else None)
+    try:
+        connect_for(args, session)
+        if args.command == "discover":
+            print_discovery(*session.discover(0))
+        elif args.command == "read":
+            rsp, rtt = session.read(0, args.handle)
+            print("%s%s  (%.1f ms)" % (rsp["data"].hex(), " (truncated)" if rsp["truncated"] else "", rtt * 1000))
+        elif args.command in ("write", "write-cmd"):
+            rtt = session.write(0, args.handle, bytes.fromhex(args.data), args.command == "write")
+            print("acknowledged after %.1f ms" % (rtt * 1000))
+        elif args.command == "notify":
+            session.subscribe(0, args.cccd, 2 if args.indicate else 1)
+            time.sleep(args.seconds)
+            print("%d notifications in %.0f s" % (session.notifications.get(0, 0), args.seconds))
+    finally:
+        close_gatt(link, session, stop)
+
+
+SHELL_HELP = """commands:
+  scan [seconds] [passive]       connect <conn> <addr> [bg]      disconnect <conn>
+  discover <conn>                read <conn> <handle>            write <conn> <handle> <hex>
+  write-cmd <conn> <handle> <hex>   notify <conn> <cccd> [off|indicate]
+  failsafe <conn> <slot> <handle> <hex>   gatt-status   status   wait <seconds>   help   quit
+(numbers accept 0x.. hex; events are printed as they arrive)"""
+
+
+def run_shell_command(session, parts):
+    """Execute one gatt-shell command (list of words); returns False for quit."""
+    cmd, a = parts[0], parts[1:]
+    num = lambda text: int(text, 0)  # noqa: E731
+    if cmd == "quit":
+        return False
+    if cmd == "help":
+        print(SHELL_HELP)
+    elif cmd == "scan":
+        session.scan_start(active="passive" not in a)
+        time.sleep(float(a[0]) if a and a[0] != "passive" else 3.0)
+        session.scan_stop()
+        for rec in session.adv.devices.values():
+            print("%s rssi %d name %r mfr %s" % (rec["addr"], rec["rssi"], rec["name"],
+                                                  "0x%04X" % rec["mfr_id"] if rec["mfr_id"] is not None else "-"))
+    elif cmd == "connect":
+        info = session.connect(num(a[0]), a[1], ADDR_AUTO, len(a) > 2 and a[2] == "bg")
+        print("connected: mtu %d, interval %.2f ms" % (info["mtu"], info["itvl"] * 1.25))
+    elif cmd == "disconnect":
+        session.disconnect(num(a[0]))
+    elif cmd == "discover":
+        print_discovery(*session.discover(num(a[0])))
+    elif cmd == "read":
+        rsp, rtt = session.read(num(a[0]), num(a[1]))
+        print("%s  (%.1f ms)" % (rsp["data"].hex(), rtt * 1000))
+    elif cmd in ("write", "write-cmd"):
+        print("ack after %.1f ms" % (session.write(num(a[0]), num(a[1]), bytes.fromhex(a[2]), cmd == "write") * 1000))
+    elif cmd == "notify":
+        mode = {"off": 0, "indicate": 2}.get(a[2] if len(a) > 2 else "", 1)
+        session.subscribe(num(a[0]), num(a[1]), mode)
+    elif cmd == "failsafe":
+        session.set_failsafe(num(a[0]), num(a[1]), num(a[2]), bytes.fromhex(a[3]) if len(a) > 3 else b"")
+    elif cmd in ("gatt-status", "status"):
+        print(session.gatt_status())
+    elif cmd == "wait":
+        time.sleep(float(a[0]))
+    else:
+        print("unknown command (try help)")
+    return True
+
+
+def cmd_gatt_shell(args):
+    """Interactive (or scripted with --script "cmd; cmd") GATT shell; connections live as long as the shell."""
+    link, caps, session, stop = open_gatt(args, echo=lambda ev: print("  <", format_event(ev))
+                                          if ev["name"] != "SCAN_REPORT" else None)
+    try:
+        if caps["max_conns"]:
+            print("stick: up to %d connections, max value %d bytes" % (caps["max_conns"], caps["max_value_len"]))
+        lines = [c.strip() for c in args.script.split(";")] if args.script else None
+        while True:
+            try:
+                text = lines.pop(0) if lines else ("quit" if args.script else input("gatt> "))
+            except EOFError:
+                break
+            parts = text.split()
+            if not parts:
+                continue
+            try:
+                if not run_shell_command(session, parts):
+                    break
+            except (DeviceError, IndexError, ValueError) as exc:
+                print("error: %s" % exc)
+    finally:
+        close_gatt(link, session, stop)
+
+
+def cmd_gatt_bench(args):
+    """Write loop against one characteristic: ACK latency histogram, BUSY count, notification count."""
+    link, caps, session, stop = open_gatt(args)
+    lat, busy, errors = [], 0, 0
+    try:
+        connect_for(args, session)
+        if args.cccd:
+            session.subscribe(0, args.cccd)
+        payload = bytes(range(args.size))
+        period, end, count = 1.0 / args.rate, time.monotonic() + args.seconds, 0
+        while time.monotonic() < end and 0 in session.connected:
+            t_next = time.monotonic() + period
+            try:
+                lat.append(session.write(0, args.handle, payload, args.response) * 1000)
+            except DeviceError as exc:
+                busy += exc.status == 11
+                errors += exc.status != 11
+            count += 1
+            time.sleep(max(0.0, t_next - time.monotonic()))
+        print("%s writes: %d sent, %d acknowledged, %d BUSY, %d other errors, %.1f writes/s" % (
+            "with-response" if args.response else "no-response", count, len(lat), busy, errors,
+            count / args.seconds))
+        print("ACK latency", format_stats(latency_stats(lat)))
+        print("notifications received: %d, dropped (stick): %s" % (session.notifications.get(0, 0), session.dropped))
+        print("link %s" % ("up" if 0 in session.connected else "LOST: " + format_event(session.disconnected.get(0, {"name": "?"}))))
+    finally:
+        close_gatt(link, session, stop)
+
+
+def parse_spike_peer(text):
+    """'AA:BB:CC:DD:EE:FF[=HANDLE[,CCCD]]' -> (addr, write_handle or None, cccd or None)."""
+    addr, _, rest = text.partition("=")
+    handle, _, cccd = rest.partition(",")
+    return addr.upper(), int(handle, 0) if handle else None, int(cccd, 0) if cccd else None
+
+
+def cmd_connspike(args):
+    """Feasibility spike (task 009 step 1, run on real hardware by the product owner).
+
+    Starts 5 advertising sets (20 ms) and an active scan, then connects the given peers one after
+    the other. After every new link all links are driven (write loop at --rate per link, optional
+    notify subscription) and observed for --settle seconds. The run ends at the first failing
+    connect, lost link or --hold timeout; the last stable link count is the answer ("max_conns").
+    """
+    link, caps, session, stop = open_gatt(args)
+    peers = [parse_spike_peer(p) for p in args.peers]
+    stable, report, stop_drive = 0, [], threading.Event()
+    stats = {"writes": 0, "busy": 0, "errors": 0}
+
+    def driver(conn_id, handle):
+        """Write loop of one link until the spike ends."""
+        payload, period = bytes(range(args.size)), 1.0 / args.rate
+        while not stop_drive.is_set():
+            t_next = time.monotonic() + period
+            try:
+                session.write(conn_id, handle, payload, response=False)
+                stats["writes"] += 1
+            except DeviceError as exc:
+                stats["busy" if exc.status == 11 else "errors"] += 1
+            time.sleep(max(0.0, t_next - time.monotonic()))
+
+    try:
+        for set_id in range(min(5, caps["max_sets"])):
+            link.command(MSG_SET_START, set_start_payload(set_id, 0xFFF0, bytes([set_id] * 8)))
+        print("%d advertising sets running" % min(5, caps["max_sets"]))
+        session.scan_start(active=True)
+        for n, (addr, handle, cccd) in enumerate(peers, 1):
+            print("--- connecting link %d to %s" % (n, addr))
+            try:
+                info = session.connect(n - 1, addr, ADDR_AUTO, False, 15000, wait=20.0)
+            except DeviceError as exc:
+                print("link %d FAILED: %s" % (n, exc))
+                report.append((n, "connect failed: %s" % exc))
+                break
+            print("link %d up: mtu %d, interval %.2f ms" % (n, info["mtu"], info["itvl"] * 1.25))
+            if cccd:
+                session.subscribe(n - 1, cccd)
+            if handle:
+                threading.Thread(target=driver, args=(n - 1, handle), daemon=True).start()
+            settle_end = time.monotonic() + args.settle
+            while time.monotonic() < settle_end and len(session.connected) == n:
+                time.sleep(0.2)
+            status = session.gatt_status()
+            print("links connected: %d (mask 0x%04X), writes %d, BUSY %d, errors %d, notify %s, "
+                  "free heap %d (min %d), dropped %s" % (
+                      len(session.connected), status["connected_mask"], stats["writes"], stats["busy"],
+                      stats["errors"], dict(session.notifications), status["free_heap"],
+                      status["min_free_heap"], session.dropped))
+            if len(session.connected) != n:
+                lost = [format_event(e) for e in session.disconnected.values()]
+                print("link lost -> %d links are NOT stable: %s" % (n, lost))
+                report.append((n, "unstable: %s" % lost))
+                break
+            stable = n
+            report.append((n, "stable for %.0f s" % args.settle))
+        if stable == len(peers) and stable:
+            print("all %d links up; holding %.0f s for the 10 min criterion" % (stable, args.hold))
+            hold_end = time.monotonic() + args.hold
+            while time.monotonic() < hold_end and len(session.connected) == stable:
+                time.sleep(0.5)
+            if len(session.connected) != stable:
+                stable -= 1
+                report.append((stable + 1, "lost during hold"))
+            else:
+                report.append((stable, "stable for hold time"))
+        print("\nRESULT: highest stable link count = %d" % stable)
+        for n, text in report:
+            print("  %d links: %s" % (n, text))
+        print("final stick status:", session.gatt_status())
+    finally:
+        stop_drive.set()
+        close_gatt(link, session, stop)
+
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", help="serial port (default: auto-detect by VID/PID + HELLO)")
@@ -664,6 +1164,63 @@ def build_parser():
     fuzz = sub.add_parser("fuzz")
     fuzz.add_argument("--rounds", type=int, default=20)
     fuzz.set_defaults(func=cmd_fuzz)
+    # ---- protocol 1.1: scanning and GATT central ----
+    def target_args(p):
+        """Options shared by the commands that connect to one device."""
+        p.add_argument("addr", help="device address AA:BB:CC:DD:EE:FF")
+        p.add_argument("--addr-type", choices=("auto", "public", "random"), default="auto")
+        p.add_argument("--no-scan", action="store_true", help="skip the scan that fills the address type cache")
+        p.add_argument("--background", action="store_true", help="background connect (no timeout)")
+        p.add_argument("--timeout", type=int, default=0, help="connect timeout in ms (0 = 10 s default)")
+
+    scan = sub.add_parser("scan", help="scan and print merged advertising data")
+    scan.add_argument("--seconds", type=float, default=5.0)
+    scan.add_argument("--passive", action="store_true", help="no scan requests (no scan response data)")
+    scan.add_argument("--duplicates", action="store_true", help="report every PDU (no stick-side filter)")
+    scan.add_argument("--interval", type=int, default=0, help="0.625 ms units, 0 = default")
+    scan.add_argument("--window", type=int, default=0, help="0.625 ms units, 0 = default")
+    scan.add_argument("--refresh", type=int, default=0, help="re-report period in ms, 0 = default")
+    scan.add_argument("--name", help="only devices whose name contains this text")
+    scan.add_argument("--mfr", type=parse_int, help="only devices with this manufacturer id")
+    scan.add_argument("--raw", action="store_true", help="print every scan report event")
+    scan.set_defaults(func=cmd_scan)
+    conn = sub.add_parser("connect", help="connect, optionally discover/subscribe, hold the link")
+    target_args(conn)
+    conn.add_argument("--discover", action="store_true")
+    conn.add_argument("--notify", type=parse_int, action="append", help="CCCD handle to subscribe (repeatable)")
+    conn.add_argument("--hold", type=float, default=10.0, help="seconds to keep the link")
+    conn.set_defaults(func=cmd_connect)
+    for name in ("discover", "read", "write", "write-cmd", "notify"):
+        one = sub.add_parser(name, help="connect, %s, disconnect" % name)
+        target_args(one)
+        if name in ("read", "write", "write-cmd"):
+            one.add_argument("handle", type=parse_int)
+        if name in ("write", "write-cmd"):
+            one.add_argument("data", help="hex string, 1..56 bytes")
+        if name == "notify":
+            one.add_argument("cccd", type=parse_int, help="CCCD handle from discovery")
+            one.add_argument("--indicate", action="store_true")
+            one.add_argument("--seconds", type=float, default=10.0)
+        one.set_defaults(func=cmd_gatt_oneshot)
+    shell = sub.add_parser("gatt-shell", help="interactive GATT shell (all commands, several links)")
+    shell.add_argument("--script", help='run commands separated by ";" instead of prompting')
+    shell.set_defaults(func=cmd_gatt_shell)
+    gbench = sub.add_parser("gatt-bench", help="write loop: ACK latency, BUSY count, notifications")
+    target_args(gbench)
+    gbench.add_argument("handle", type=parse_int, help="characteristic value handle to write")
+    gbench.add_argument("--cccd", type=parse_int, help="subscribe to this CCCD handle first")
+    gbench.add_argument("--size", type=int, default=8, help="bytes per write")
+    gbench.add_argument("--rate", type=float, default=100.0, help="writes per second")
+    gbench.add_argument("--seconds", type=float, default=10.0)
+    gbench.add_argument("--response", action="store_true", help="write with response (default: no response)")
+    gbench.set_defaults(func=cmd_gatt_bench)
+    spike = sub.add_parser("connspike", help="maximum connection spike (5 adv sets + scan + N links)")
+    spike.add_argument("peers", nargs="+", help="AA:BB:CC:DD:EE:FF[=WRITE_HANDLE[,CCCD_HANDLE]] per peripheral")
+    spike.add_argument("--rate", type=float, default=100.0, help="write-no-response per second and link")
+    spike.add_argument("--size", type=int, default=18, help="bytes per write")
+    spike.add_argument("--settle", type=float, default=30.0, help="seconds each link count must stay stable")
+    spike.add_argument("--hold", type=float, default=600.0, help="seconds to hold the final link count")
+    spike.set_defaults(func=cmd_connspike)
     return parser
 
 

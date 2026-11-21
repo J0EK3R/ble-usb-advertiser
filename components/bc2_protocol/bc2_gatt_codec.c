@@ -21,6 +21,12 @@ static void put_u16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)(v >> 8);
 }
 
+static void put_u32(uint8_t *p, uint32_t v)
+{
+    put_u16(p, (uint16_t)(v & 0xFFFFu));
+    put_u16(p + 2, (uint16_t)(v >> 16));
+}
+
 /** Initialise an outgoing frame header. */
 static void frame_begin(bc2_frame_t *f, uint8_t type, uint8_t seq)
 {
@@ -192,7 +198,9 @@ void bc2_encode_gatt_status_rsp(bc2_frame_t *out, uint8_t seq, const bc2_gatt_st
     put_u16(&out->payload[3], st->connected_mask);
     put_u16(&out->payload[5], st->dropped_scan);
     put_u16(&out->payload[7], st->dropped_notify);
-    out->len = 9;
+    put_u32(&out->payload[9], st->free_heap);
+    put_u32(&out->payload[13], st->min_free_heap);
+    out->len = 17;
 }
 
 bool bc2_encode_evt_notify(bc2_frame_t *out, uint8_t conn_id, uint16_t handle, uint8_t flags,

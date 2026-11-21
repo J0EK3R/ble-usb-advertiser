@@ -46,7 +46,7 @@ class CrcTests(unittest.TestCase):
 class EncodeTests(unittest.TestCase):
     def test_golden_requests(self):
         F = bc2adv.Frame
-        self.assertEqual(GV_HELLO, bc2adv.encode(F(0x01, 1, bc2adv.hello_payload(1000))))
+        self.assertEqual(GV_HELLO, bc2adv.encode(F(0x01, 1, bc2adv.hello_payload(1000, minor=0))))
         self.assertEqual(GV_PING, bc2adv.encode(F(0x02, 2)))
         self.assertEqual(GV_SET_START, bc2adv.encode(F(0x10, 3, bc2adv.set_start_payload(
             0, 0xFFF0, bytes(range(1, 9)), interval=32, tx=127))))

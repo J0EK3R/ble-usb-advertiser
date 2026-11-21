@@ -268,7 +268,8 @@ static void test_encode_responses(void)
     ASSERT_TRUE(bc2_encode_read_rsp(&fr, 15, 1, 0x12, 0, rd, 2));
     ASSERT_TRUE(matches_vector(&fr, GV_READ_RSP, sizeof(GV_READ_RSP)));
     const bc2_gatt_status_t st = {.scanning = 1, .connecting_mask = 4, .connected_mask = 3,
-                                  .dropped_scan = 2, .dropped_notify = 0};
+                                  .dropped_scan = 2, .dropped_notify = 0,
+                                  .free_heap = 0x00028000, .min_free_heap = 0x00014000};
     bc2_encode_gatt_status_rsp(&fr, 20, &st);
     ASSERT_TRUE(matches_vector(&fr, GV_GATT_STATUS_RSP, sizeof(GV_GATT_STATUS_RSP)));
     const uint8_t att = 3;
@@ -286,8 +287,8 @@ static void test_encode_events(void)
                                     0x00, 0x41, 0x20, 0x00, 0x00, 0x00};
     static const uint8_t uuid128[16] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 0x23, 0x16,
                                         0xDE, 0xEF, 0x12, 0x12, 0x23, 0x16, 0x00, 0x00};
-    static const uint8_t uuid_chr[16] = {0x24, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 0x23, 0x16,
-                                         0xDE, 0xEF, 0x12, 0x12, 0x23, 0x16, 0x00, 0x00};
+    static const uint8_t uuid_chr[16] = {0x23, 0xD1, 0xBC, 0xEA, 0x5F, 0x78, 0x23, 0x16,
+                                         0xDE, 0xEF, 0x12, 0x12, 0x24, 0x16, 0x00, 0x00};
     static const uint8_t uuid16[2] = {0x0A, 0x18};
     bc2_frame_t fr;
     ASSERT_TRUE(bc2_encode_evt_notify(&fr, 0, 0x11, 0, notify, sizeof(notify)));

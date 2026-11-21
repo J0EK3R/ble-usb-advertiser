@@ -202,6 +202,8 @@ typedef struct {
     uint16_t connected_mask;     /**< bit n = conn_id n is connected */
     uint16_t dropped_scan;       /**< total dropped scan reports since HELLO (wraps) */
     uint16_t dropped_notify;     /**< total dropped notifications since HELLO (wraps) */
+    uint32_t free_heap;          /**< current free heap in bytes (0 = unknown), for the connection spike */
+    uint32_t min_free_heap;      /**< lowest free heap since boot in bytes (0 = unknown) */
 } bc2_gatt_status_t;
 
 /** READ_RSP. @return false if @p len > BC2_GATT_MAX_VALUE. */
