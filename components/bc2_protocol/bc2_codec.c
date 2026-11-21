@@ -173,6 +173,11 @@ void bc2_encode_hello_rsp(bc2_frame_t *out, uint8_t seq, const bc2_hello_rsp_t *
     put_u16(&p[17], rsp->max_interval);
     put_u16(&p[19], rsp->keepalive_ms);
     memcpy(&p[21], rsp->device_id, 6);
+    p[27] = rsp->gatt_flags;                               /* protocol 1.1 capability block */
+    p[28] = rsp->max_conns;
+    p[29] = rsp->max_value_len;
+    p[30] = rsp->max_scan_data;
+    p[31] = rsp->failsafe_slots;
     out->len = BC2_HELLO_RSP_LEN;
 }
 

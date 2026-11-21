@@ -13,7 +13,8 @@ set(COMP ${CMAKE_CURRENT_SOURCE_DIR}/../../components)
 add_library(bc2_protocol STATIC
     ${COMP}/bc2_protocol/bc2_crc16.c
     ${COMP}/bc2_protocol/bc2_framer.c
-    ${COMP}/bc2_protocol/bc2_codec.c)
+    ${COMP}/bc2_protocol/bc2_codec.c
+    ${COMP}/bc2_protocol/bc2_gatt_codec.c)
 target_include_directories(bc2_protocol PUBLIC ${COMP}/bc2_protocol/include)
 target_compile_options(bc2_protocol PRIVATE -Wall -Wextra -Werror -Wconversion)
 
@@ -23,7 +24,7 @@ target_link_libraries(bc2_core PUBLIC bc2_protocol)
 target_compile_options(bc2_core PRIVATE -Wall -Wextra -Werror -Wconversion)
 
 add_executable(bc2_tests
-    test_main.c test_crc.c test_framer.c test_codec.c test_core.c fake_ble.c)
+    test_main.c test_crc.c test_framer.c test_codec.c test_gatt_codec.c test_core.c fake_ble.c)
 target_link_libraries(bc2_tests PRIVATE bc2_core)
 target_compile_options(bc2_tests PRIVATE -Wall -Wextra -Werror)
 

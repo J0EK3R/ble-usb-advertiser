@@ -3,6 +3,7 @@
  * @brief Tests for the bc2_core session state machine using a fake BLE adapter and fake clock.
  */
 #include "bc2_core.h"
+#include "bc2_gatt_protocol.h"
 #include "fake_ble.h"
 #include "test_minunit.h"
 
@@ -30,13 +31,14 @@ static void test_no_session(void)
     ASSERT_EQ(0, env.call_count);
 }
 
-/** Unknown types, including the reserved GATT ranges, give UNKNOWN_CMD (even before HELLO). */
+/** Unknown types, including the still reserved GATT ranges, give UNKNOWN_CMD (even before HELLO). */
 static void test_unknown_and_reserved_types(void)
 {
     fake_env_t env;
-    const uint8_t types[] = {0x00, 0x03, 0x15, 0x20, BC2_RESERVED_GATT_REQ_FIRST, 0x40,
+    const uint8_t types[] = {0x00, 0x03, 0x15, 0x20, 0x2F, BC2_RESERVED_GATT_REQ_FIRST, 0x40,
                              BC2_RESERVED_GATT_REQ_LAST, BC2_RESERVED_GATT_RSP_FIRST,
-                             BC2_RESERVED_GATT_EVT_LAST, BC2_MSG_ACK, 0xFF};
+                             BC2_RESERVED_GATT_RSP_LAST, BC2_RESERVED_GATT_EVT_FIRST,
+                             BC2_RESERVED_GATT_EVT_LAST, BC2_MSG_ACK, BC2_MSG_READ_RSP, 0xFF};
     fake_init(&env);
     for (size_t i = 0; i < sizeof(types); i++) {
         fake_clear(&env);

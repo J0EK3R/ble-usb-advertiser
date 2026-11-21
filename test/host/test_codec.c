@@ -175,11 +175,13 @@ static void test_decode_golden_misc(void)
 
 static void test_encode_hello_rsp(void)
 {
-    const bc2_hello_rsp_t rsp = {.status = 0, .proto_major = 1, .proto_minor = 0, .fw_major = 0,
-                                 .fw_minor = 1, .fw_patch = 0, .max_sets = 5,
+    const bc2_hello_rsp_t rsp = {.status = 0, .proto_major = 1, .proto_minor = 1, .fw_major = 0,
+                                 .fw_minor = 2, .fw_patch = 0, .max_sets = 5,
                                  .max_data_with_flags = 24, .max_data_no_flags = 27,
                                  .min_interval = 32, .max_interval = 16384, .keepalive_ms = 1000,
-                                 .device_id = {0x24, 0x0A, 0xBC, 0x11, 0x22, 0x33}};
+                                 .device_id = {0x24, 0x0A, 0xBC, 0x11, 0x22, 0x33},
+                                 .gatt_flags = 7, .max_conns = 4, .max_value_len = 56,
+                                 .max_scan_data = 31, .failsafe_slots = 4};
     bc2_frame_t fr;
     bc2_encode_hello_rsp(&fr, 1, &rsp);
     ASSERT_EQ(BC2_HELLO_RSP_LEN, fr.len);

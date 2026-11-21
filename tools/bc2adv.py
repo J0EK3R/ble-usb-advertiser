@@ -10,6 +10,8 @@ small command line on top of it:
     shell   interactive prompt with a background keep-alive
     bench   measure update round-trip time and device processing time
     fuzz    send garbage / truncated / corrupted frames between valid ones
+    scan, connect, discover, read, write, write-cmd, notify, disconnect, gatt-status, failsafe,
+    gatt-bench, gatt-shell, connspike   GATT central tests (protocol 1.1, docs/protocol.md 13+)
 
 The framing part (crc16, Frame, encode, Decoder) does not need pyserial so it can be unit tested
 without hardware (tools/tests/test_framing.py).
@@ -27,7 +29,7 @@ import time
 SOF = 0xB2
 MIN_LEN, MAX_LEN, MAX_PAYLOAD = 2, 62, 60
 FRAME_TIMEOUT_S = 0.2
-PROTO_MAJOR, PROTO_MINOR = 1, 0
+PROTO_MAJOR, PROTO_MINOR = 1, 1
 MAGIC = b"BC2ADV"
 USB_VID, USB_PID = 0x303A, 0x1001  # fixed identity of the ESP32-S3 USB Serial/JTAG peripheral
 
@@ -35,10 +37,23 @@ MSG_HELLO, MSG_PING = 0x01, 0x02
 MSG_SET_START, MSG_SET_UPDATE, MSG_SET_STOP, MSG_STOP_ALL, MSG_GET_STATUS = 0x10, 0x11, 0x12, 0x13, 0x14
 MSG_ACK, MSG_HELLO_RSP, MSG_PONG, MSG_SET_STATUS_RSP = 0x80, 0x81, 0x82, 0x83
 MSG_EVT_SET_STOPPED, MSG_EVT_BUTTON, MSG_EVT_TIMEOUT = 0xE0, 0xE1, 0xE2
+# Protocol 1.1: scanning and GATT central
+(MSG_SCAN_START, MSG_SCAN_STOP, MSG_CONNECT, MSG_DISCONNECT, MSG_DISCOVER, MSG_READ, MSG_WRITE,
+ MSG_WRITE_CMD, MSG_SUBSCRIBE, MSG_GET_GATT_STATUS, MSG_SET_FAILSAFE) = range(0x30, 0x3B)
+MSG_READ_RSP, MSG_GATT_STATUS_RSP = 0xA0, 0xA1
+(MSG_EVT_NOTIFY, MSG_EVT_CONNECTED, MSG_EVT_DISCONNECTED, MSG_EVT_SCAN_REPORT, MSG_EVT_GATT_SERVICE,
+ MSG_EVT_GATT_CHAR, MSG_EVT_DISCOVER_DONE, MSG_EVT_SCAN_STOPPED, MSG_EVT_DROPPED) = range(0xC0, 0xC9)
+FIRST_EVENT_TYPE = 0xC0  # device->host types from here on carry SEQ 0 and are no responses
+MAX_VALUE, MAX_SCAN_DATA, MAX_CONN_ID, FAILSAFE_SLOTS, FAILSAFE_MAX_DATA = 56, 31, 15, 4, 20
+ADDR_AUTO = 0xFF
 
 STATUS_NAMES = {0: "OK", 1: "UNKNOWN_CMD", 2: "BAD_LENGTH", 3: "BAD_PARAM", 4: "NO_SESSION",
                 5: "VERSION_UNSUPPORTED", 6: "ALREADY_RUNNING", 7: "SET_NOT_FOUND",
-                8: "PAYLOAD_TOO_LARGE", 9: "BLE_ERROR", 10: "NO_RESOURCES"}
+                8: "PAYLOAD_TOO_LARGE", 9: "BLE_ERROR", 10: "NO_RESOURCES", 11: "BUSY",
+                12: "NOT_CONNECTED", 13: "TIMEOUT", 14: "ATT_ERROR", 15: "DISCONNECTED",
+                16: "NOT_SUPPORTED"}
+DISCONNECT_REASONS = {0xF0: "connect timeout", 0xF1: "cancelled", 0xF2: "stick safety stop",
+                      0xF3: "stick internal error"}
 PDU_TYPES = {"ind": 0, "scan": 1, "nonconn": 2}
 
 
@@ -148,16 +163,167 @@ def set_update_payload(set_id, mfr, data):
     return struct.pack("<BHB", set_id, mfr, len(data)) + bytes(data)
 
 
+def addr_to_bytes(text):
+    """'AA:BB:CC:DD:EE:FF' -> 6 bytes in display order (byte 0 = first octet), as on the wire."""
+    raw = bytes.fromhex(text.replace(":", "").replace("-", ""))
+    if len(raw) != 6:
+        raise ValueError("address must have 6 octets")
+    return raw
+
+
+def addr_to_text(raw):
+    """6 bytes in display order -> 'AA:BB:CC:DD:EE:FF'."""
+    return bytes(raw).hex(":").upper()
+
+
+def scan_start_payload(active=True, duplicates=False, interval=0, window=0, refresh_ms=0):
+    """SCAN_START: flags(1) interval(2) window(2) refresh_ms(2); 0 values select the defaults."""
+    flags = (1 if active else 0) | (2 if duplicates else 0)
+    return struct.pack("<BHHH", flags, interval, window, refresh_ms)
+
+
+def connect_payload(conn_id, addr, addr_type=ADDR_AUTO, background=False, timeout_ms=0, itvl_min=0,
+                    itvl_max=0):
+    """CONNECT: conn_id(1) addr(6) addr_type(1) flags(1) timeout_ms(2) itvl_min(2) itvl_max(2)."""
+    return (bytes([conn_id]) + bytes(addr) +
+            struct.pack("<BBHHH", addr_type, 1 if background else 0, timeout_ms, itvl_min, itvl_max))
+
+
+def conn_id_payload(conn_id):
+    """DISCONNECT and DISCOVER: conn_id(1)."""
+    return bytes([conn_id])
+
+
+def read_payload(conn_id, handle):
+    """READ: conn_id(1) handle(2)."""
+    return struct.pack("<BH", conn_id, handle)
+
+
+def write_payload(conn_id, handle, data):
+    """WRITE and WRITE_CMD: conn_id(1) handle(2) data(1..56)."""
+    if not 1 <= len(data) <= MAX_VALUE:
+        raise ValueError("data must have 1..%d bytes" % MAX_VALUE)
+    return struct.pack("<BH", conn_id, handle) + bytes(data)
+
+
+def subscribe_payload(conn_id, cccd_handle, mode):
+    """SUBSCRIBE: conn_id(1) cccd_handle(2) mode(1: 0 off, 1 notify, 2 indicate)."""
+    return struct.pack("<BHB", conn_id, cccd_handle, mode)
+
+
+def set_failsafe_payload(conn_id, slot, handle, data):
+    """SET_FAILSAFE: conn_id(1) slot(1) handle(2) data(0..20); empty data clears the slot."""
+    if len(data) > FAILSAFE_MAX_DATA:
+        raise ValueError("failsafe data is limited to %d bytes" % FAILSAFE_MAX_DATA)
+    return struct.pack("<BBH", conn_id, slot, handle) + bytes(data)
+
+
+def uuid_text(raw):
+    """UUID bytes in ATT wire order (2 or 16 bytes) -> text (16 bit: '1624', 128 bit: canonical)."""
+    raw = bytes(raw)
+    if len(raw) == 2:
+        return "%04x" % struct.unpack("<H", raw)
+    be = raw[::-1].hex()
+    return "%s-%s-%s-%s-%s" % (be[:8], be[8:12], be[12:16], be[16:20], be[20:])
+
+
+def parse_adv_data(data):
+    """Split raw AD structures into [(ad_type, value_bytes)]; stops at a zero length or truncation."""
+    out, pos = [], 0
+    while pos < len(data) and data[pos] != 0:
+        length = data[pos]
+        if pos + 1 + length > len(data):
+            break
+        out.append((data[pos + 1], bytes(data[pos + 2: pos + 1 + length])))
+        pos += 1 + length
+    return out
+
+
+class AdvMerger:
+    """Merges ADV and SCAN_RSP reports of one address (BC2 needs both: LEGO hubs put the name into the scan response)."""
+
+    def __init__(self):
+        self.devices = {}
+
+    def update(self, report):
+        """Add a parsed scan report (see parse_event); returns the merged record of its address."""
+        rec = self.devices.setdefault(report["addr"], {"addr": report["addr"], "ad": {}})
+        rec.update(addr_type=report["addr_type"], rssi=report["rssi"])
+        if not report["scan_rsp"]:
+            rec["connectable"] = report["connectable"]
+        for ad_type, value in parse_adv_data(report["data"]):
+            rec["ad"][ad_type] = value
+        rec["name"] = rec["ad"].get(0x09, rec["ad"].get(0x08, b"")).decode("utf-8", "replace")
+        rec["mfr_id"] = struct.unpack("<H", rec["ad"][0xFF][:2])[0] if len(rec["ad"].get(0xFF, b"")) >= 2 else None
+        return rec
+
+
+def parse_read_rsp(payload):
+    conn_id, handle, flags = struct.unpack_from("<BHB", payload)
+    return {"conn_id": conn_id, "handle": handle, "truncated": bool(flags & 1), "data": payload[4:]}
+
+
+def parse_gatt_status(payload):
+    scanning, connecting, connected, dropped_scan, dropped_notify = struct.unpack("<BHHHH", payload[:9])
+    return {"scanning": bool(scanning), "connecting_mask": connecting, "connected_mask": connected,
+            "dropped_scan": dropped_scan, "dropped_notify": dropped_notify}
+
+
+def parse_event(frame):
+    """Decode an event frame (0xC0..0xC8 and the 1.0 events) into a dict with a 'name' key."""
+    p, t = frame.payload, frame.type
+    if t == MSG_EVT_NOTIFY:
+        conn_id, handle, flags = struct.unpack_from("<BHB", p)
+        return {"name": "NOTIFY", "conn_id": conn_id, "handle": handle, "indication": bool(flags & 1),
+                "truncated": bool(flags & 2), "data": p[4:]}
+    if t == MSG_EVT_CONNECTED:
+        conn_id, mtu, itvl = struct.unpack_from("<BHH", p)
+        return {"name": "CONNECTED", "conn_id": conn_id, "mtu": mtu, "itvl": itvl, "addr": addr_to_text(p[5:11])}
+    if t == MSG_EVT_DISCONNECTED:
+        return {"name": "DISCONNECTED", "conn_id": p[0], "phase": p[1], "reason": p[2]}
+    if t == MSG_EVT_SCAN_REPORT:
+        flags, length = p[8], p[9]
+        return {"name": "SCAN_REPORT", "addr": addr_to_text(p[0:6]), "addr_type": p[6],
+                "rssi": struct.unpack("b", p[7:8])[0], "connectable": bool(flags & 1),
+                "scan_rsp": bool(flags & 2), "directed": bool(flags & 4), "data": p[10:10 + length]}
+    if t == MSG_EVT_GATT_SERVICE:
+        conn_id, start, end, ulen = struct.unpack_from("<BHHB", p)
+        return {"name": "SERVICE", "conn_id": conn_id, "start": start, "end": end, "uuid": uuid_text(p[6:6 + ulen])}
+    if t == MSG_EVT_GATT_CHAR:
+        conn_id, value, cccd, props, ulen = struct.unpack_from("<BHHBB", p)
+        return {"name": "CHAR", "conn_id": conn_id, "value_handle": value, "cccd_handle": cccd,
+                "props": props, "uuid": uuid_text(p[7:7 + ulen])}
+    if t == MSG_EVT_DISCOVER_DONE:
+        return {"name": "DISCOVER_DONE", "conn_id": p[0], "status": p[1], "n_services": p[2], "n_chars": p[3]}
+    if t == MSG_EVT_SCAN_STOPPED:
+        return {"name": "SCAN_STOPPED", "reason": p[0], "rc": struct.unpack_from("<H", p, 1)[0]}
+    if t == MSG_EVT_DROPPED:
+        return {"name": "DROPPED", "kind": "scan" if p[0] == 1 else "notify", "count": struct.unpack_from("<H", p, 1)[0]}
+    if t == MSG_EVT_SET_STOPPED:
+        return {"name": "SET_STOPPED", "set_id": p[0], "reason": p[1]}
+    if t == MSG_EVT_BUTTON:
+        return {"name": "BUTTON"}
+    if t == MSG_EVT_TIMEOUT:
+        return {"name": "TIMEOUT", "timeout_ms": struct.unpack_from("<H", p)[0]}
+    return {"name": "UNKNOWN_0x%02X" % t, "payload": p.hex()}
+
+
 def parse_hello_rsp(payload):
     """Decode a HELLO_RSP payload into a dict, or return None if it is not one."""
     if len(payload) < 27 or payload[:6] != MAGIC:
         return None
     (status, pmaj, pmin, fmaj, fmin, fpat, max_sets, dwf, dnf,
      imin, imax, keepalive) = struct.unpack_from("<BBBBBBBBBHHH", payload, 6)
-    return {"status": status, "proto": "%d.%d" % (pmaj, pmin), "fw": "%d.%d.%d" % (fmaj, fmin, fpat),
+    caps = {"status": status, "proto": "%d.%d" % (pmaj, pmin), "fw": "%d.%d.%d" % (fmaj, fmin, fpat),
             "max_sets": max_sets, "max_data_with_flags": dwf, "max_data_no_flags": dnf,
             "min_interval": imin, "max_interval": imax, "keepalive_ms": keepalive,
             "device_id": payload[21:27].hex(":")}
+    # Protocol 1.1 appends the GATT capability block; a 1.0 device sends only 27 bytes.
+    gatt_flags, max_conns, max_value, max_scan, failsafe_slots = (
+        struct.unpack_from("<5B", payload, 27) if len(payload) >= 32 else (0, 0, 0, 0, 0))
+    caps.update({"gatt_flags": gatt_flags, "max_conns": max_conns, "max_value_len": max_value,
+                 "max_scan_data": max_scan, "failsafe_slots": failsafe_slots})
+    return caps
 
 
 def parse_pong(payload):
@@ -202,7 +368,7 @@ class Link:
             print("%s %s" % (direction, bytes(data).hex(" ")), file=sys.stderr)
 
     def _read_loop(self):
-        """Decode incoming bytes; responses are stored by SEQ, events (>= 0xE0) are queued."""
+        """Decode incoming bytes; responses are stored by SEQ, events (type >= 0xC0) are queued."""
         while self.running:
             try:
                 data = self.ser.read(256)
@@ -212,7 +378,7 @@ class Link:
                 continue
             self._log("<-", data)
             for frame in self.decoder.feed(data):
-                if frame.type >= 0xE0:
+                if frame.type >= FIRST_EVENT_TYPE:
                     self.events.put(frame)
                 else:
                     with self.cond:

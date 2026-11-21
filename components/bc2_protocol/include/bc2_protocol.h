@@ -21,9 +21,9 @@ extern "C" {
 /* ------------------------------------------------------------------------- */
 
 #define BC2_PROTO_MAJOR 1      /**< Incompatible protocol changes bump this. */
-#define BC2_PROTO_MINOR 0      /**< Additive protocol changes bump this. */
+#define BC2_PROTO_MINOR 1      /**< Additive protocol changes bump this (1.1 = GATT central, docs/protocol.md 13+). */
 #define BC2_FW_MAJOR 0         /**< Firmware version reported in HELLO_RSP. */
-#define BC2_FW_MINOR 1
+#define BC2_FW_MINOR 2
 #define BC2_FW_PATCH 0
 
 /* ------------------------------------------------------------------------- */
@@ -52,7 +52,7 @@ extern "C" {
 #define BC2_SET_ID_SUMMARY 0xFFu        /**< GET_STATUS set_id value requesting the device summary. */
 #define BC2_MAGIC "BC2ADV"              /**< 6 byte magic at the start of HELLO_RSP. */
 #define BC2_MAGIC_LEN 6u
-#define BC2_HELLO_RSP_LEN 27u           /**< Payload length of HELLO_RSP. */
+#define BC2_HELLO_RSP_LEN 32u           /**< Payload length of HELLO_RSP (27 bytes in protocol 1.0). */
 
 /** SET_START flag bits. */
 #define BC2_FLAG_ADD_AD_FLAGS 0x01u     /**< bit0: add AD flags field 02 01 06. */
@@ -90,14 +90,15 @@ typedef enum {
 } bc2_msg_type_t;
 
 /**
- * Reserved TYPE ranges (not implemented in protocol 1.x, see docs/protocol.md).
- * A device that receives one of these answers ACK(UNKNOWN_CMD) like any unknown type.
+ * TYPE ranges of the GATT messages (protocol 1.1, see bc2_gatt_protocol.h) and the part of the
+ * ranges that is still reserved. A device answers every type it does not implement, including the
+ * reserved ones and all device-to-host types, with ACK(UNKNOWN_CMD).
  */
-#define BC2_RESERVED_GATT_REQ_FIRST 0x30u   /**< host->device, future GATT messages. */
+#define BC2_RESERVED_GATT_REQ_FIRST 0x3Bu   /**< host->device, still reserved (0x30-0x3A are used). */
 #define BC2_RESERVED_GATT_REQ_LAST 0x4Fu
-#define BC2_RESERVED_GATT_RSP_FIRST 0xA0u   /**< device->host responses to GATT requests. */
+#define BC2_RESERVED_GATT_RSP_FIRST 0xA2u   /**< device->host responses, still reserved (0xA0-0xA1 used). */
 #define BC2_RESERVED_GATT_RSP_LAST 0xBFu
-#define BC2_RESERVED_GATT_EVT_FIRST 0xC0u   /**< device->host asynchronous GATT events. */
+#define BC2_RESERVED_GATT_EVT_FIRST 0xC9u   /**< device->host events, still reserved (0xC0-0xC8 used). */
 #define BC2_RESERVED_GATT_EVT_LAST 0xDFu
 
 /** Status code carried in ACK frames. */
@@ -112,7 +113,14 @@ typedef enum {
     BC2_ERR_SET_NOT_FOUND = 7,
     BC2_ERR_PAYLOAD_TOO_LARGE = 8,
     BC2_ERR_BLE_ERROR = 9,
-    BC2_ERR_NO_RESOURCES = 10
+    BC2_ERR_NO_RESOURCES = 10,
+    /* ---- protocol 1.1 (GATT) ---- */
+    BC2_ERR_BUSY = 11,            /**< a procedure is already running on the connection / controller queue full */
+    BC2_ERR_NOT_CONNECTED = 12,   /**< conn_id has no connected link */
+    BC2_ERR_TIMEOUT = 13,         /**< GATT procedure did not finish within 5 s (link is terminated) */
+    BC2_ERR_ATT_ERROR = 14,       /**< peer answered with an ATT error, ACK extra = att_error u8 */
+    BC2_ERR_DISCONNECTED = 15,    /**< link was lost while the request was pending */
+    BC2_ERR_NOT_SUPPORTED = 16    /**< feature not built into this firmware */
 } bc2_status_t;
 
 /** Reason byte of EVT_SET_STOPPED. */
@@ -270,6 +278,11 @@ typedef struct {
     uint16_t max_interval;
     uint16_t keepalive_ms;          /**< effective (clamped) value */
     uint8_t device_id[6];           /**< Bluetooth public MAC */
+    uint8_t gatt_flags;             /**< bit0 scan, bit1 GATT central, bit2 failsafe write (0 = no GATT) */
+    uint8_t max_conns;              /**< simultaneous GATT links (0 if GATT is not built in) */
+    uint8_t max_value_len;          /**< largest GATT value in one frame (56) */
+    uint8_t max_scan_data;          /**< largest advertising data in a scan report (31) */
+    uint8_t failsafe_slots;         /**< failsafe writes per connection (4, 0 if unsupported) */
 } bc2_hello_rsp_t;
 
 /** Content of PONG. */
