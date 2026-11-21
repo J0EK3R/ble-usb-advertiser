@@ -1182,6 +1182,21 @@ static void test_hello_drops_links(void)
     ASSERT_EQ(BC2_OK, fr.payload[1]);
 }
 
+/** A safety stop during a connect attempt also terminates the slot, so a link in the MTU wait cannot survive. */
+static void test_safety_stop_terminates_attempt_slot(void)
+{
+    fake_env_t env;
+    fake_init(&env);
+    fake_hello(&env, 1000);
+    send_connect(&env, 1, 0x11, BC2_CONNECT_FLAG_BACKGROUND, 0);   /* running attempt (adapter may be in MTU wait) */
+    fake_clear(&env);
+    fake_tick(&env, 1000);                                 /* keep-alive timeout */
+    ASSERT_EQ(1, fake_count_gcalls(&env, GCALL_CANCEL, 0xFF));
+    ASSERT_EQ(1, fake_count_gcalls(&env, GCALL_TERMINATE, 1));
+    fake_tick(&env, 2000);                                 /* verify stage 1: both requests are repeated */
+    ASSERT_TRUE(fake_count_gcalls(&env, GCALL_TERMINATE, 1) >= 2);
+}
+
 /** A link that survives the terminate request: terminated again after 1 s, the chip is reset after 2 s. */
 static void test_surviving_link_hard_reset(void)
 {
@@ -1314,6 +1329,7 @@ void run_gatt_core_tests(void)
     RUN_TEST(test_hello_drops_links);
     RUN_TEST(test_surviving_link_hard_reset);
     RUN_TEST(test_terminate_repeats);
+    RUN_TEST(test_safety_stop_terminates_attempt_slot);
     RUN_TEST(test_state_lost_safety_stop);
     RUN_TEST(test_hello_resets_counters);
     RUN_TEST(test_hello_minor_versions);

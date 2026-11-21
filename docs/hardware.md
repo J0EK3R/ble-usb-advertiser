@@ -84,3 +84,10 @@ documented in the BC2 code; it is measured per hub:
 | LEGO DUPLO train hub | | `08 00 81 00 11 51 00 00` to the hub characteristic if it keeps running |
 | MouldKing DIY | | 18 byte neutral frame `CC AA BB 01 80 80 80 80 80 80 80 80 80 80 80 80 66 33` |
 | LEGO WeDo 2.0 | | two writes to `1565`: `01 01 01 00` and `02 01 01 00` |
+
+### Future: dynamic link budget
+
+Not implemented. The controller activities (`CONFIG_BT_CTRL_BLE_MAX_ACT` 10) are one pool shared by advertising
+sets, the scan and the links, while `max_conns` is a static 4. A later task (after the spike results) may build
+NimBLE with more connection slots, enforce `used links + active sets + scan <= 10` at run time (`NO_RESOURCES`
+otherwise) and report the free budget to the host. The product owner decides.

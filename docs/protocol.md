@@ -501,8 +501,11 @@ the old links (EVT_DISCONNECTED 0xF2) may still arrive; their `conn_id`s stay bu
 ### 17.1 Flow control and loss policy
 
 - Responses and state events (EVT_CONNECTED, EVT_DISCONNECTED, EVT_GATT_*, EVT_DISCOVER_DONE, EVT_SCAN_STOPPED,
-  EVT_TIMEOUT, EVT_BUTTON, EVT_DROPPED) are **never dropped** in normal operation. They are only lost when
-  the host does not read the port at all for a long time and the stick's 3 KiB TX queue is full.
+  EVT_TIMEOUT, EVT_BUTTON, EVT_DROPPED) are not dropped by the stick's queues
+  in normal operation. They are lost (or truncated, then rejected by the host's LEN/CRC check) while the host
+  does not read the port: the stick's TX task gives up on a write after 20 ms and moves on, and the 3 KiB TX
+  queue can fill up. These losses are only logged on the stick's console; there is no counter in the frozen
+  `GATT_STATUS_RSP` layout.
 - EVT_NOTIFY and EVT_SCAN_REPORT are droppable: they are refused when the TX queue is more than half full, and
   scan reports additionally above 150 per second or when the stick's internal event queue is more than half
   full. Drops are counted and reported by EVT_DROPPED and GATT_STATUS_RSP.

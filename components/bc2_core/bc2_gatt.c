@@ -760,10 +760,14 @@ void bc2_gatt_safety_stop(bc2_gatt_t *g, uint32_t now_ms, uint8_t reason)
             break;
         case BC2_GC_ATTEMPT:
             cancel_attempt(g, id, reason, now_ms);
+            /* The adapter may already own a link (MTU wait of up to 2 s) that connect_cancel cannot stop:
+             * terminate() covers both the pending connect and an existing link. */
+            g->ops.terminate(g->ops.ctx, id);
             c->safety_kill = true;
             break;
         case BC2_GC_CANCEL:
             c->cancel_reason = reason;
+            g->ops.terminate(g->ops.ctx, id);                 /* same reason: the link may be in the MTU wait */
             c->safety_kill = true;
             break;
         case BC2_GC_CONNECTED:
@@ -812,9 +816,8 @@ static void verify_links_gone(bc2_gatt_t *g, uint32_t now)
         if (g->verify_stage == 1) {                           /* first miss: ask again */
             if (c->state == BC2_GC_CANCEL) {
                 g->ops.connect_cancel(g->ops.ctx);
-            } else {
-                g->ops.terminate(g->ops.ctx, id);
             }
+            g->ops.terminate(g->ops.ctx, id);                 /* also ends a link in the adapter's MTU wait */
         }
     }
     if (!survivors) {

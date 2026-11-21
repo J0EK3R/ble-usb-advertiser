@@ -1,5 +1,8 @@
 # Manual hardware verification (needs the AtomS3U)
 
+> **HARDWARE VERIFICATION PENDING:** the GATT central (firmware 0.2.0) has only been verified by host tests and
+> a build. No spike (S1-S5) or G1-G12 step has run on a real AtomS3U; the real `max_conns` is unknown.
+
 Part 1 covers advertising (protocol 1.0), part 2 the scanner and GATT central (protocol 1.1, firmware
 0.2.0). The results of the steps that were executed are collected in `tasks/007-usb-advertiser-fw/hw-results.md`
 of the team repository. The firmware 0.2.0 steps (part 2) were written without hardware at hand and are **not yet

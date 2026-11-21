@@ -83,10 +83,21 @@ A release is a tag `vX.Y.Z` that matches `BC2_FW_MAJOR/MINOR/PATCH` in
   fake adapter, so every state machine path is tested without hardware. Tests that depend on the number of links run
   for `max_conns` 1, 4, 9 and 16.
 - Threads: USB RX task and core task call into the core under one mutex; the NimBLE host task only queues events
-  (`bc2_gatt_event_t`, 64 slots, droppable events are refused when the queue is half full) and wakes the core task; the
+  (`bc2_gatt_event_t`, 128 slots, droppable events are refused when the queue is half full) and wakes the core task; the
   TX task alone blocks on USB writes. The core never calls the adapter from the host task and the adapter never calls the
   core.
 - Safety: a safety stop (keep-alive timeout, HELLO, button) runs the failsafe writes, terminates all links, stops the scan
   and the advertising sets; links that survive are terminated again after 1 s and the chip is reset after 2 s.
 - To add a GATT operation: protocol constants and codec (`bc2_gatt_protocol.h`, `bc2_gatt_codec.c`), golden vector
   (`tools/bc2adv.py` + both test suites), core handler (`bc2_gatt.c`), adapter op (`bc2_gatt_nimble.c`), docs.
+
+## Event queue overflow
+
+The adapter queue (`EVENT_QUEUE_LEN` 128 in `bc2_gatt_nimble.c`) carries state events from the NimBLE host task
+to the core task. One discovery can post about 50 events in a burst. If the core task is delayed long enough
+to fill the queue, a state event is lost, `s_state_lost` is raised and the core runs a safety stop of all links
+(safe, but harsh). Remedies if it ever shows up: raise the length further (about 80 bytes per slot) or pace
+the discovery posting.
+
+At init the adapter logs a warning when `CONFIG_BT_CTRL_BLE_MAX_ACT - advertising sets - 1 scan < MAX_LINKS`;
+CONNECT then fails with `NO_RESOURCES` once the controller budget is used up.

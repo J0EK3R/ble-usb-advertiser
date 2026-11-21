@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "bc2_scanfilter.h"
+#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -46,7 +47,17 @@
  */
 #define MAX_LINKS (CONFIG_BC2ADV_MAX_CONNS < CONFIG_BT_NIMBLE_MAX_CONNECTIONS ? CONFIG_BC2ADV_MAX_CONNS : CONFIG_BT_NIMBLE_MAX_CONNECTIONS)
 
-#define EVENT_QUEUE_LEN 64              /**< adapter -> core events (about 5 KiB); one discovery posts up to ~50 at once */
+/**
+ * Adapter -> core events (about 10 KiB). One discovery posts up to ~50 events in a burst from the NimBLE host task
+ * (higher priority than the core task); with LINK/OP_DONE events of other links a delayed core task could overflow
+ * 64 slots. An overflow raises s_state_lost and triggers a safety stop of all links (safe, but harsh), so the queue
+ * is sized with margin (see docs/development.md, "Event queue overflow").
+ */
+#define EVENT_QUEUE_LEN 128
+/** Advertising sets that can run at once: NimBLE counts instances beyond instance 0. */
+#define ADV_SETS (CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES + 1)
+/** Log tag of this file. */
+static const char *const TAG = "bc2_gatt_nimble";
 #define MTU_WAIT_MS 2000                /**< a peer that does not answer the MTU request: continue with 23 */
 #define SUPERVISION_TIMEOUT 400         /**< 4 s in 10 ms units */
 #define INIT_SCAN_ITVL 96               /**< 60 ms: scan parameters of the initiator itself */
@@ -925,6 +936,11 @@ esp_err_t bc2_gatt_nimble_init(void (*wake)(void))
         return ESP_ERR_NO_MEM;
     }
     s_wake = wake;
+    /* Controller budget check: advertising sets and the scan share CONFIG_BT_CTRL_BLE_MAX_ACT with the links. */
+    if (CONFIG_BT_CTRL_BLE_MAX_ACT - ADV_SETS - 1 < MAX_LINKS) {
+        ESP_LOGW(TAG, "controller budget %d - %d sets - 1 scan < %d links: CONNECT may fail with NO_RESOURCES",
+                 CONFIG_BT_CTRL_BLE_MAX_ACT, ADV_SETS, MAX_LINKS);
+    }
     bc2_addrcache_init(&s_addr_cache);
     bc2_scanfilter_init(&s_filter, BC2_SCAN_DEFAULT_REFRESH_MS, false);
     /* Our request in the MTU exchange; 64 covers the largest BC2 write (BuWizz 3: 38 bytes + 3). */

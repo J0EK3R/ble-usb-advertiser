@@ -6,6 +6,7 @@
 
 #include "bc2_txq.h"
 #include "driver/usb_serial_jtag.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -21,10 +22,23 @@ static bc2_txq_t s_queue;
 static portMUX_TYPE s_queue_mux = portMUX_INITIALIZER_UNLOCKED;   /* guards s_queue (short memcpy only) */
 static TaskHandle_t s_tx_task;
 
-/** Write a frame to the port. A partial write corrupts one frame, which the host detects by its CRC. */
+/** Frames lost or truncated because the host did not read (only touched by the TX task). */
+static uint32_t s_tx_lost_frames;
+
+/**
+ * Write a frame to the port. While the host does not read, the write times out after WRITE_TIMEOUT_MS and the
+ * rest of the frame is dropped (the host sees a truncated frame, rejected by LEN/CRC). Such losses are counted and
+ * logged (rate limited); the frozen GATT_STATUS_RSP layout has no field for them.
+ */
 static void write_frame(const uint8_t *data, size_t len)
 {
-    (void)usb_serial_jtag_write_bytes(data, len, pdMS_TO_TICKS(WRITE_TIMEOUT_MS));
+    const int written = usb_serial_jtag_write_bytes(data, len, pdMS_TO_TICKS(WRITE_TIMEOUT_MS));
+    if (written < 0 || (size_t)written < len) {
+        s_tx_lost_frames++;
+        if ((s_tx_lost_frames & (s_tx_lost_frames - 1)) == 0) {   /* log at 1, 2, 4, 8 ... only */
+            ESP_LOGW("bc2_usb", "host not reading: %u frame(s) lost or truncated", (unsigned)s_tx_lost_frames);
+        }
+    }
 }
 
 /** TX task: wait for queued frames and write them out. The only place that may block on the host. */
