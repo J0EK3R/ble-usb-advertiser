@@ -212,6 +212,24 @@ void bc2_gatt_session_reset(bc2_gatt_t *g, uint32_t now_ms);
 /** True if a scan runs or any connection slot is in use (LED "active"). */
 bool bc2_gatt_active(const bc2_gatt_t *g);
 
+/**
+ * Handle range in which the descriptors (CCCD) of one characteristic live: from value_handle + 1
+ * up to the handle before the next characteristic definition, or up to the service end handle for
+ * the last characteristic. A service end of 0xFFFF (a hub that reports "to the end of the table")
+ * is handled without any 16 bit wrap.
+ *
+ * @param value_handle     value handle of the characteristic
+ * @param has_next         true if another characteristic follows in the same service
+ * @param next_def_handle  declaration handle of that next characteristic (ignored if !has_next)
+ * @param service_end      end handle of the service
+ * @param first            out: first handle to scan (value_handle + 1)
+ * @param last             out: last handle to scan
+ * @return false if the range is empty (no handle between value and end); @p first / @p last are
+ *         then unspecified
+ */
+bool bc2_gatt_descriptor_range(uint16_t value_handle, bool has_next, uint16_t next_def_handle,
+                               uint16_t service_end, uint16_t *first, uint16_t *last);
+
 #ifdef __cplusplus
 }
 #endif

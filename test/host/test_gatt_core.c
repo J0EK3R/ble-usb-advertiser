@@ -99,7 +99,8 @@ static void test_hello_capabilities(void)
         ASSERT_TRUE(fake_out_frame(&env, 0, &fr));
         ASSERT_EQ(32, fr.len);
         ASSERT_EQ(1, fr.payload[8]);                       /* proto minor */
-        ASSERT_EQ(2, fr.payload[10]);                      /* fw minor 0.2.0 */
+        ASSERT_EQ(2, fr.payload[10]);                      /* fw minor 0.2.x */
+        ASSERT_EQ(1, fr.payload[11]);                      /* fw patch 0.2.1 */
         ASSERT_EQ(7, fr.payload[27]);                      /* scan | central | failsafe */
         ASSERT_EQ(MAXES[i], fr.payload[28]);
         ASSERT_EQ(56, fr.payload[29]);
@@ -1281,8 +1282,38 @@ static void test_hello_resets_counters(void)
     ASSERT_EQ(0, fr.payload[5]);
 }
 
+/** Regression (fw 0.2.1): DUPLO layout, last service 0x0009..0xFFFF, last char NOTIFY, CCCD at 0x000C. */
+static void test_descriptor_range_last_char_service_end_ffff(void)
+{
+    uint16_t first = 0, last = 0;
+    /* char 1624: def 0x000A, value 0x000B, last of the last service whose end is 0xFFFF */
+    ASSERT_TRUE(bc2_gatt_descriptor_range(0x000B, false, 0, 0xFFFF, &first, &last));
+    ASSERT_EQ(0x000C, first);                              /* the CCCD handle is the first one scanned */
+    ASSERT_EQ(0xFFFF, last);
+}
+
+/** Descriptor range of inner characteristics, single-handle ranges and the 16 bit edge cases. */
+static void test_descriptor_range_edges(void)
+{
+    uint16_t first = 0, last = 0;
+    ASSERT_TRUE(bc2_gatt_descriptor_range(0x0011, true, 0x0014, 0x0020, &first, &last));   /* inner char */
+    ASSERT_EQ(0x0012, first);
+    ASSERT_EQ(0x0013, last);
+    ASSERT_TRUE(bc2_gatt_descriptor_range(0x0011, false, 0, 0x0012, &first, &last));       /* CCCD is the service end */
+    ASSERT_EQ(0x0012, first);
+    ASSERT_EQ(0x0012, last);
+    ASSERT_TRUE(!bc2_gatt_descriptor_range(0x0011, true, 0x0012, 0x0020, &first, &last));  /* next char right behind */
+    ASSERT_TRUE(!bc2_gatt_descriptor_range(0x0011, false, 0, 0x0011, &first, &last));      /* value is service end */
+    ASSERT_TRUE(!bc2_gatt_descriptor_range(0xFFFF, false, 0, 0xFFFF, &first, &last));      /* no wrap to 0 */
+    ASSERT_TRUE(bc2_gatt_descriptor_range(0xFFFE, false, 0, 0xFFFF, &first, &last));
+    ASSERT_EQ(0xFFFF, first);
+    ASSERT_EQ(0xFFFF, last);
+}
+
 void run_gatt_core_tests(void)
 {
+    RUN_TEST(test_descriptor_range_last_char_service_end_ffff);
+    RUN_TEST(test_descriptor_range_edges);
     RUN_TEST(test_hello_capabilities);
     RUN_TEST(test_no_gatt_build);
     RUN_TEST(test_gatt_needs_session);

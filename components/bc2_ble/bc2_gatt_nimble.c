@@ -637,10 +637,14 @@ static void next_descriptor(uint8_t id, uint16_t handle, disc_t *d)
             continue;
         }
         /* descriptors live between the value handle and the next characteristic definition (or the service end) */
-        const uint16_t end = d->cur_chr + 1u < d->n_chr ? (uint16_t)(d->chr[d->cur_chr + 1].def_handle - 1u)
-                                                        : d->svc[d->cur_svc].end;
-        if (c->value_handle >= end ||
-            ble_gattc_disc_all_dscs(handle, (uint16_t)(c->value_handle + 1u), end, dsc_cb,
+        const chr_t *next = d->cur_chr + 1u < d->n_chr ? &d->chr[d->cur_chr + 1] : NULL;
+        uint16_t first, last;
+        /* NimBLE's "start_handle" is the LAST KNOWN handle, not the first one to scan: it sends its Find
+         * Information request from start_handle + 1. Passing value_handle + 1 skipped the CCCD at
+         * value_handle + 1 (the usual place) and the CCCD was never found. Pass the value handle itself. */
+        if (!bc2_gatt_descriptor_range(c->value_handle, next != NULL, next != NULL ? next->def_handle : 0,
+                                       d->svc[d->cur_svc].end, &first, &last) ||
+            ble_gattc_disc_all_dscs(handle, (uint16_t)(first - 1u), last, dsc_cb,
                                     (void *)(uintptr_t)id) != 0) {
             d->cur_chr++;                          /* nothing to scan, or the stack refused: report without CCCD */
             continue;

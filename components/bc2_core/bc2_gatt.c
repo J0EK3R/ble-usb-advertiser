@@ -905,3 +905,20 @@ void bc2_gatt_tick(bc2_gatt_t *g, uint32_t now_ms)
         g->last_drop_report_ms = now_ms;
     }
 }
+
+bool bc2_gatt_descriptor_range(uint16_t value_handle, bool has_next, uint16_t next_def_handle,
+                               uint16_t service_end, uint16_t *first, uint16_t *last)
+{
+    /* 32 bit arithmetic: value_handle + 1 must not wrap when the value handle is 0xFFFF */
+    const uint32_t lo = (uint32_t)value_handle + 1u;
+    uint32_t hi = service_end;
+    if (has_next) {
+        hi = next_def_handle > 0u ? (uint32_t)next_def_handle - 1u : 0u;   /* handle 0 is invalid: empty range */
+    }
+    if (lo > hi || lo > 0xFFFFu) {
+        return false;
+    }
+    *first = (uint16_t)lo;
+    *last = (uint16_t)hi;
+    return true;
+}
