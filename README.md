@@ -16,11 +16,13 @@ Works on Windows, Linux and macOS with **Chrome or Edge**. The browser needs Web
 Firefox and Safari do not provide.
 
 1. **Download the firmware image.**
-   - Open the latest successful [CI run on `main`](https://github.com/J0EK3R/ble-usb-advertiser/actions/workflows/ci.yml?query=branch%3Amain+is%3Asuccess).
-     You must be signed in to GitHub to download artifacts, and artifacts expire after 90 days.
-   - Download the artifact **`bc2-usb-advertiser-firmware`** and unzip it.
-   - You only need **`bc2-usb-advertiser-merged.bin`**. It is a single image with the bootloader, the
-     partition table and the app.
+   - Open the [latest release](https://github.com/J0EK3R/ble-usb-advertiser/releases/latest) and
+     download **`bc2-usb-advertiser-<version>-merged.bin`** from its assets. This needs no GitHub login.
+   - The file is a single image with the bootloader, the partition table and the app.
+   - Development builds of `main` are available from the
+     [CI runs](https://github.com/J0EK3R/ble-usb-advertiser/actions/workflows/ci.yml?query=branch%3Amain+is%3Asuccess)
+     as artifact `bc2-usb-advertiser-firmware`. You need a GitHub login to download them, and they expire
+     after 90 days. Use `bc2-usb-advertiser-merged.bin` from the zip.
 2. **Plug in the stick.** On Windows it shows up as one "USB Serial Device (COMx)" with hardware id
    `VID_303A&PID_1001&MI_00`. A second entry "USB JTAG/serial debug unit" is the debug interface and
    not a COM port.
@@ -28,11 +30,11 @@ Firefox and Safari do not provide.
    - **ESP Launchpad** (by Espressif): <https://espressif.github.io/esp-launchpad/>
      1. Select the **DIY** tab.
      2. Click **Connect** and choose the stick's port (`303A:1001`).
-     3. Add the file `bc2-usb-advertiser-merged.bin` with flash address **`0x0`**.
+     3. Add the downloaded `.bin` file with flash address **`0x0`**.
      4. Click **Program**.
    - **ESPHome Web**: <https://web.esphome.io/>
      1. Click **Connect** and choose the port.
-     2. Click **Install** and pick `bc2-usb-advertiser-merged.bin`. It is written to address `0x0`
+     2. Click **Install** and pick the downloaded `.bin` file. It is written to address `0x0`
         automatically. The file does not have to be an ESPHome firmware.
    - The address must be **`0x0`**, because the merged image starts with the bootloader. Any other
      address leaves the stick unbootable until it is flashed again correctly.
