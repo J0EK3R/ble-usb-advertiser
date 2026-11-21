@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "bc2_gatt.h"
 #include "bc2_protocol.h"
 
 #ifdef __cplusplus
@@ -59,7 +60,12 @@ typedef struct {
 /** I/O operations (USB write, time, emergency reset). */
 typedef struct {
     void *ctx;                                                        /**< passed to every call */
-    void (*write)(void *ctx, const uint8_t *data, size_t len);        /**< best effort, may drop */
+    void (*write)(void *ctx, const uint8_t *data, size_t len);        /**< responses / state events: best effort */
+    /**
+     * Scan reports and notifications: may be refused when the TX queue is under pressure (returns
+     * false, the core counts the drop). NULL = same as write() and always accepted.
+     */
+    bool (*write_droppable)(void *ctx, const uint8_t *data, size_t len);
     uint32_t (*now_us)(void *ctx);                                    /**< free running microsecond clock */
     void (*hard_reset)(void *ctx);                                    /**< reset the chip (guaranteed silence) */
 } bc2_io_ops_t;
@@ -91,6 +97,7 @@ typedef struct {
     bc2_ble_ops_t ble;
     bc2_io_ops_t io;
     bc2_framer_t framer;
+    bc2_gatt_t gatt;               /**< scanner / GATT central logic (protocol 1.1) */
     bc2_slot_t slots[BC2_CORE_MAX_SETS];
     bool session;                  /**< a HELLO was accepted and no timeout happened since */
     bool timed_out;                /**< keep-alive timeout happened, cleared by HELLO */
@@ -105,8 +112,11 @@ typedef struct {
     uint16_t seen_parse_errors;    /**< parse error counter value already reported to the LED */
 } bc2_core_t;
 
-/** Initialise the core with its hardware operations. No session, no sets. */
-void bc2_core_init(bc2_core_t *core, const bc2_ble_ops_t *ble, const bc2_io_ops_t *io);
+/**
+ * Initialise the core with its hardware operations. No session, no sets, no links.
+ * @param gatt GATT adapter operations, or NULL for a build without GATT (requests answer NOT_SUPPORTED)
+ */
+void bc2_core_init(bc2_core_t *core, const bc2_ble_ops_t *ble, const bc2_gatt_ops_t *gatt, const bc2_io_ops_t *io);
 
 /**
  * Feed received USB bytes; complete frames are handled and answered immediately.
@@ -114,14 +124,20 @@ void bc2_core_init(bc2_core_t *core, const bc2_ble_ops_t *ble, const bc2_io_ops_
  */
 void bc2_core_on_bytes(bc2_core_t *core, const uint8_t *data, size_t len, uint32_t now_ms);
 
-/** Periodic housekeeping (call every <= 50 ms): keep-alive timeout, asynchronous set failures. */
+/**
+ * Periodic housekeeping (call every <= 20 ms, and whenever the GATT adapter signals an event):
+ * adapter events, GATT deadlines, keep-alive timeout, asynchronous set failures.
+ */
 void bc2_core_tick(bc2_core_t *core, uint32_t now_ms);
 
-/** Button short press: stop all sets immediately, keep the session, emit EVT_BUTTON. */
+/** Button short press: stop all sets, links and the scan immediately, keep the session, emit EVT_BUTTON. */
 void bc2_core_on_button(bc2_core_t *core, uint32_t now_ms);
 
 /** LED state to display now. */
 bc2_led_state_t bc2_core_led_state(const bc2_core_t *core, uint32_t now_ms);
+
+/** True while a scan runs or a GATT link / connect attempt exists (shown like advertising). */
+bool bc2_core_gatt_active(const bc2_core_t *core);
 
 /** True during the short white flash after a SET_UPDATE (visible activity while ADVERTISING). */
 bool bc2_core_activity_flash(const bc2_core_t *core, uint32_t now_ms);

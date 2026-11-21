@@ -36,6 +36,29 @@ static void send_frame(bc2_core_t *core, const bc2_frame_t *frame)
     }
 }
 
+/** bc2_gatt_out_t.send: GATT frames go through the same transport, droppable ones may be refused. */
+static bool gatt_send(void *ctx, const bc2_frame_t *frame, bool droppable)
+{
+    bc2_core_t *core = ctx;
+    uint8_t wire[BC2_MAX_FRAME];
+    const size_t n = bc2_frame_encode(frame, wire, sizeof(wire));
+    if (n == 0) {
+        return false;
+    }
+    if (droppable && core->io.write_droppable != NULL) {
+        return core->io.write_droppable(core->io.ctx, wire, n);
+    }
+    core->io.write(core->io.ctx, wire, n);
+    return true;
+}
+
+/** bc2_gatt_out_t.hard_reset. */
+static void gatt_hard_reset(void *ctx)
+{
+    bc2_core_t *core = ctx;
+    core->io.hard_reset(core->io.ctx);
+}
+
 /** Send ACK(orig_type, status, extra). */
 static void send_ack(bc2_core_t *core, uint8_t seq, uint8_t orig_type, uint8_t status,
                      const uint8_t *extra, uint8_t extra_len)
@@ -100,7 +123,9 @@ static bool is_known_request(uint8_t type)
     case BC2_MSG_GET_STATUS:
         return true;
     default:
-        return false;   /* includes the reserved GATT ranges and all device->host types */
+        /* 0x30..0x3A are the protocol 1.1 GATT requests; everything else, including the still
+         * reserved ranges and all device->host types, is unknown */
+        return bc2_is_gatt_request(type);
     }
 }
 
@@ -121,7 +146,7 @@ static uint16_t effective_keepalive(uint16_t requested)
 }
 
 /** HELLO: version check, reset everything, open the session, answer with the capabilities. */
-static void handle_hello(bc2_core_t *core, const bc2_frame_t *fr)
+static void handle_hello(bc2_core_t *core, const bc2_frame_t *fr, uint32_t now_ms)
 {
     bc2_req_hello_t req;
     const bc2_status_t st = bc2_decode_hello(fr, &req);
@@ -133,6 +158,7 @@ static void handle_hello(bc2_core_t *core, const bc2_frame_t *fr)
         send_ack(core, fr->seq, fr->type, BC2_ERR_VERSION_UNSUPPORTED, NULL, 0);
         return;
     }
+    bc2_gatt_session_reset(&core->gatt, now_ms);        /* links and scan end with the old session */
     stop_all(core);                                     /* HELLO always starts from silence */
     memset(core->slots, 0, sizeof(core->slots));
     core->framer.parse_errors = 0;
@@ -148,7 +174,11 @@ static void handle_hello(bc2_core_t *core, const bc2_frame_t *fr)
                            .max_data_with_flags = BC2_MAX_DATA_WITH_FLAGS,
                            .max_data_no_flags = BC2_MAX_DATA_NO_FLAGS,
                            .min_interval = BC2_MIN_INTERVAL, .max_interval = BC2_MAX_INTERVAL,
-                           .keepalive_ms = core->keepalive_ms};
+                           .keepalive_ms = core->keepalive_ms,
+                           .gatt_flags = bc2_gatt_flags(&core->gatt),
+                           .max_conns = bc2_gatt_max_conns(&core->gatt),
+                           .max_value_len = BC2_GATT_MAX_VALUE, .max_scan_data = BC2_GATT_MAX_SCAN_DATA,
+                           .failsafe_slots = bc2_gatt_present(&core->gatt) ? BC2_GATT_FAILSAFE_SLOTS : 0u};
     core->ble.device_id(core->ble.ctx, rsp.device_id);
     bc2_frame_t out;
     bc2_encode_hello_rsp(&out, fr->seq, &rsp);
@@ -301,11 +331,15 @@ static void handle_frame(bc2_core_t *core, const bc2_frame_t *fr, uint32_t now_m
         return;
     }
     if (fr->type == BC2_MSG_HELLO) {
-        handle_hello(core, fr);
+        handle_hello(core, fr, now_ms);
         return;
     }
     if (!core->session) {
         send_ack(core, fr->seq, fr->type, BC2_ERR_NO_SESSION, NULL, 0);
+        return;
+    }
+    if (bc2_is_gatt_request(fr->type)) {
+        bc2_gatt_handle_request(&core->gatt, fr, now_ms);
         return;
     }
     switch (fr->type) {
@@ -345,11 +379,13 @@ static void handle_frame(bc2_core_t *core, const bc2_frame_t *fr, uint32_t now_m
 /* Public API                                                                 */
 /* ------------------------------------------------------------------------- */
 
-void bc2_core_init(bc2_core_t *core, const bc2_ble_ops_t *ble, const bc2_io_ops_t *io)
+void bc2_core_init(bc2_core_t *core, const bc2_ble_ops_t *ble, const bc2_gatt_ops_t *gatt, const bc2_io_ops_t *io)
 {
     memset(core, 0, sizeof(*core));
     core->ble = *ble;
     core->io = *io;
+    const bc2_gatt_out_t out = {.ctx = core, .send = gatt_send, .hard_reset = gatt_hard_reset};
+    bc2_gatt_init(&core->gatt, gatt, &out);
     core->keepalive_ms = BC2_KEEPALIVE_DEFAULT_MS;
     bc2_framer_init(&core->framer);
 }
@@ -371,6 +407,9 @@ void bc2_core_on_bytes(bc2_core_t *core, const uint8_t *data, size_t len, uint32
 
 void bc2_core_tick(bc2_core_t *core, uint32_t now_ms)
 {
+    bc2_gatt_pump(&core->gatt, now_ms);                      /* adapter events first: they may end links */
+    bc2_gatt_tick(&core->gatt, now_ms);
+
     /* Sets that failed on their own (restart after a connection attempt etc.) */
     uint8_t id = 0;
     uint8_t reason = 0;
@@ -386,7 +425,8 @@ void bc2_core_tick(bc2_core_t *core, uint32_t now_ms)
 
     /* Keep-alive: no valid frame for keepalive_ms ends the session and silences everything. */
     if (core->session && (uint32_t)(now_ms - core->last_rx_ms) >= core->keepalive_ms) {
-        stop_all(core);
+        bc2_gatt_safety_stop(&core->gatt, now_ms, BC2_REASON_SAFETY);   /* motors first: links, scan ... */
+        stop_all(core);                                      /* ... then the advertising sets */
         core->session = false;
         core->timed_out = true;
         bc2_frame_t evt;
@@ -397,6 +437,7 @@ void bc2_core_tick(bc2_core_t *core, uint32_t now_ms)
 
 void bc2_core_on_button(bc2_core_t *core, uint32_t now_ms)
 {
+    bc2_gatt_safety_stop(&core->gatt, now_ms, BC2_REASON_SAFETY);
     stop_all(core);                                          /* session is kept on purpose */
     core->button_active = true;
     core->button_until_ms = now_ms + BC2_BUTTON_DISPLAY_MS;
@@ -417,9 +458,14 @@ bc2_led_state_t bc2_core_led_state(const bc2_core_t *core, uint32_t now_ms)
         return BC2_LED_TIMEOUT;
     }
     if (core->session) {
-        return active_mask(core) != 0 ? BC2_LED_ADVERTISING : BC2_LED_CONNECTED;
+        return (active_mask(core) != 0 || bc2_gatt_active(&core->gatt)) ? BC2_LED_ADVERTISING : BC2_LED_CONNECTED;
     }
     return core->ble.ready(core->ble.ctx) ? BC2_LED_NO_HOST : BC2_LED_BOOT;
+}
+
+bool bc2_core_gatt_active(const bc2_core_t *core)
+{
+    return bc2_gatt_active(&core->gatt);
 }
 
 bool bc2_core_activity_flash(const bc2_core_t *core, uint32_t now_ms)

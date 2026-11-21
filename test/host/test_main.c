@@ -16,6 +16,7 @@ void run_codec_tests(void);
 void run_gatt_codec_tests(void);
 void run_txq_tests(void);
 void run_scanfilter_tests(void);
+void run_gatt_core_tests(void);
 void run_core_tests(void);
 
 int main(void)
@@ -26,6 +27,7 @@ int main(void)
     run_gatt_codec_tests();
     run_txq_tests();
     run_scanfilter_tests();
+    run_gatt_core_tests();
     run_core_tests();
     printf("\n%d tests run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed == 0 ? 0 : 1;
