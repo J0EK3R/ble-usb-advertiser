@@ -38,14 +38,13 @@
 /* Configuration                                                              */
 /* ------------------------------------------------------------------------- */
 
-/** Controller activities used by the 5 advertising sets and the scan; the rest is left for links. */
-#define ACTIVITIES_FOR_ADV_AND_SCAN (CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES + 1 + 1)
-#define CONTROLLER_LINK_BUDGET (CONFIG_BT_CTRL_BLE_MAX_ACT - ACTIVITIES_FOR_ADV_AND_SCAN)
-_Static_assert(CONTROLLER_LINK_BUDGET >= 1, "BT_CTRL_BLE_MAX_ACT leaves no room for a GATT link");
-
-/** Links announced to the host: the smallest of Kconfig value, NimBLE slots and controller activity budget. */
-#define LINKS_A (CONFIG_BC2ADV_MAX_CONNS < CONFIG_BT_NIMBLE_MAX_CONNECTIONS ? CONFIG_BC2ADV_MAX_CONNS : CONFIG_BT_NIMBLE_MAX_CONNECTIONS)
-#define MAX_LINKS (LINKS_A < CONTROLLER_LINK_BUDGET ? LINKS_A : CONTROLLER_LINK_BUDGET)
+/**
+ * Links announced to the host: the smaller of the Kconfig value and the NimBLE connection slots.
+ * The controller budget behind the default (CONFIG_BT_CTRL_BLE_MAX_ACT 10 - 5 advertising sets - 1 scan = 4)
+ * is deliberately not enforced here, so the connection spike (docs/verification.md) can try 5 by raising
+ * BC2ADV_MAX_CONNS, CONFIG_BT_NIMBLE_MAX_CONNECTIONS together.
+ */
+#define MAX_LINKS (CONFIG_BC2ADV_MAX_CONNS < CONFIG_BT_NIMBLE_MAX_CONNECTIONS ? CONFIG_BC2ADV_MAX_CONNS : CONFIG_BT_NIMBLE_MAX_CONNECTIONS)
 
 #define EVENT_QUEUE_LEN 64              /**< adapter -> core events (about 5 KiB); one discovery posts up to ~50 at once */
 #define MTU_WAIT_MS 2000                /**< a peer that does not answer the MTU request: continue with 23 */

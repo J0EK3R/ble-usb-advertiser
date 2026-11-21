@@ -14,7 +14,8 @@ CONFIG_BT_NIMBLE_EXT_ADV_MAX_SIZE=64
 CONFIG_BT_NIMBLE_ENABLE_PERIODIC_ADV=n
 # Links: the controller shares CONFIG_BT_CTRL_BLE_MAX_ACT activities between the 5 advertising sets,
 # the scan and the connections: 10 (the maximum of the ESP32-S3) - 5 - 1 = 4 links. NimBLE needs
-# the same number of connection slots. BC2ADV_MAX_CONNS (main/Kconfig.projbuild) announces it.
+# the same number of connection slots. BC2ADV_MAX_CONNS (main/Kconfig.projbuild) announces
+# min(BC2ADV_MAX_CONNS, CONFIG_BT_NIMBLE_MAX_CONNECTIONS).
 CONFIG_BT_CTRL_BLE_MAX_ACT=10
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # Broadcaster + peripheral (peripheral is required for connectable ADV_IND) + central + observer

@@ -1088,6 +1088,8 @@ def cmd_connspike(args):
         session.scan_start(active=True)
         for n, (addr, handle, cccd) in enumerate(peers, 1):
             print("--- connecting link %d to %s" % (n, addr))
+            if not session.wait_for(lambda: addr in session.adv.devices, 10.0):
+                print("warning: %s was not seen by the scan, connecting with a public address" % addr)
             try:
                 info = session.connect(n - 1, addr, ADDR_AUTO, False, 15000, wait=20.0)
             except DeviceError as exc:

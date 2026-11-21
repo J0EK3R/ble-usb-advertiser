@@ -21,11 +21,12 @@ menu "BC2 USB Advertiser"
         range 1 16
         default 4
         help
-            Upper limit reported in HELLO_RSP. The effective value is the minimum of this setting,
-            CONFIG_BT_NIMBLE_MAX_CONNECTIONS and the controller activity budget
-            (CONFIG_BT_CTRL_BLE_MAX_ACT minus the advertising sets and one scan). The default 4 is the
-            ceiling of an ESP32-S3 with 5 advertising sets and a running scan (10 - 5 - 1); the real
-            maximum is verified on hardware with `bc2adv.py connspike` (docs/verification.md).
+            Upper limit reported in HELLO_RSP. The effective value is the smaller of this setting and
+            CONFIG_BT_NIMBLE_MAX_CONNECTIONS. The controller shares CONFIG_BT_CTRL_BLE_MAX_ACT (max. 10 on
+            the ESP32-S3) between the advertising sets, the scan and the links, so the default 4 is the
+            expected ceiling with 5 advertising sets and a running scan (10 - 5 - 1). The real maximum is
+            verified on hardware with `bc2adv.py connspike` (docs/verification.md); to try more, raise
+            this value and CONFIG_BT_NIMBLE_MAX_CONNECTIONS together.
 
     config BC2ADV_LED_BRIGHTNESS
         int "RGB LED brightness (0..255)"

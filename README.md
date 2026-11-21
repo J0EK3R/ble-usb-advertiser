@@ -14,12 +14,12 @@ with the Android app.
 - **Several devices at once:** up to 5 simultaneous advertising sets, each with its own data, interval
   and transmit power.
 - **Plug and play:** no driver is needed on Windows 10/11, and BC2 finds the stick automatically.
+- **Scanner and GATT:** the stick also scans and connects to BLE devices (LEGO hubs, MouldKing DIY, ...), several
+  at the same time, so BC2 can use GATT devices without a Windows Bluetooth adapter (firmware 0.2.0).
 - **Safety:** everything stops when BC2 disappears (keep-alive timeout) or when the button on the stick
-  is pressed.
+  is pressed: advertising sets, scan and GATT links.
 - **Status LED:** shows booting, waiting for a host, connected, advertising, timeout and error.
 - **Open protocol:** a small, documented serial protocol, plus a Python test tool.
-
-The stick handles BLE advertising only. GATT support (connecting to hubs) is planned.
 
 ## Flashing
 
