@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  # Pinned ESP-IDF release, keep in sync with README.md.
+  # Pinned ESP-IDF release, keep in sync with docs/development.md.
   IDF_VERSION: v5.5.6
 
 jobs:
