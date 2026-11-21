@@ -12,12 +12,23 @@ CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=4
 # Only legacy (31 byte) data is ever used, keep the extended buffers small.
 CONFIG_BT_NIMBLE_EXT_ADV_MAX_SIZE=64
 CONFIG_BT_NIMBLE_ENABLE_PERIODIC_ADV=n
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-# Broadcaster + peripheral (peripheral is required for connectable ADV_IND).
+# Links: the controller shares CONFIG_BT_CTRL_BLE_MAX_ACT activities between the 5 advertising sets,
+# the scan and the connections: 10 (the maximum of the ESP32-S3) - 5 - 1 = 4 links. NimBLE needs
+# the same number of connection slots. BC2ADV_MAX_CONNS (main/Kconfig.projbuild) announces it.
+CONFIG_BT_CTRL_BLE_MAX_ACT=10
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
+# Broadcaster + peripheral (peripheral is required for connectable ADV_IND) + central + observer
+# (scanner and GATT client, protocol 1.1).
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+# A connect attempt may start while the scan runs (otherwise the adapter pauses the scan itself).
+CONFIG_BT_NIMBLE_HOST_ALLOW_CONNECT_WITH_SCAN=y
+# MTU the stick requests after every connect (BuWizz 3 writes 38 bytes, protocol values are <= 56).
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=64
+# Buffers for notification bursts of several links.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
 CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
 
 # The USB Serial/JTAG port carries only protocol frames: no console, no logs.

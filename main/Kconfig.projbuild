@@ -8,6 +8,25 @@ menu "BC2 USB Advertiser"
             Upper limit reported in HELLO_RSP. The effective value is
             min(this, CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES + 1).
 
+    config BC2ADV_ENABLE_GATT
+        bool "Enable scanner and GATT central (protocol 1.1)"
+        default y
+        help
+            Adds the BLE scanner and up to BC2ADV_MAX_CONNS GATT connections next to the advertising sets.
+            Without it the firmware behaves like version 0.1 (HELLO_RSP announces no GATT support).
+
+    config BC2ADV_MAX_CONNS
+        int "Maximum number of simultaneous GATT connections"
+        depends on BC2ADV_ENABLE_GATT
+        range 1 16
+        default 4
+        help
+            Upper limit reported in HELLO_RSP. The effective value is the minimum of this setting,
+            CONFIG_BT_NIMBLE_MAX_CONNECTIONS and the controller activity budget
+            (CONFIG_BT_CTRL_BLE_MAX_ACT minus the advertising sets and one scan). The default 4 is the
+            ceiling of an ESP32-S3 with 5 advertising sets and a running scan (10 - 5 - 1); the real
+            maximum is verified on hardware with `bc2adv.py connspike` (docs/verification.md).
+
     config BC2ADV_LED_BRIGHTNESS
         int "RGB LED brightness (0..255)"
         range 1 255

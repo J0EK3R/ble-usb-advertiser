@@ -4,15 +4,24 @@
  *
  * Tasks:
  *   usb  (prio 6) reads USB bytes and feeds bc2_core
- *   core (prio 5) 20 ms housekeeping: keep-alive timeout, async set failures, button
+ *   core (prio 5) housekeeping every 20 ms or when the GATT adapter queued an event: keep-alive
+ *                 timeout, GATT events and deadlines, async set failures, button
+ *   tx   (prio 4) in bc2_usb: writes the queued frames to the USB port (may block on the host)
  *   led  (prio 3) 50 ms LED pattern update
+ *   NimBLE host task (created by bc2_ble) runs the BLE callbacks and only queues events
  * All bc2_core calls are serialised by s_core_mutex because the core itself is not thread safe.
+ * Nothing that blocks on the host (USB writes) runs under that mutex any more: bc2_core only
+ * enqueues its frames (bc2_usb_enqueue).
  */
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "bc2_ble.h"
 #include "bc2_core.h"
+#include "sdkconfig.h"
+#if CONFIG_BC2ADV_ENABLE_GATT
+#include "bc2_gatt_nimble.h"
+#endif
 #include "bc2_led.h"
 #include "bc2_usb.h"
 #include "board.h"
@@ -24,7 +33,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-/** Period of the core housekeeping task in milliseconds. */
+/** Longest wait of the core housekeeping task in milliseconds (keep-alive and deadlines are checked at least this often). */
 #define CORE_PERIOD_MS 20
 /** Period of the LED task in milliseconds. */
 #define LED_PERIOD_MS 50
@@ -34,6 +43,7 @@
 
 static bc2_core_t s_core;
 static SemaphoreHandle_t s_core_mutex;
+static TaskHandle_t s_core_task;          /**< woken by the GATT adapter when it queued an event */
 
 /** Milliseconds since boot (wraps after 49 days, all core arithmetic is wrap safe). */
 static uint32_t now_ms(void)
@@ -44,14 +54,21 @@ static uint32_t now_ms(void)
 /* ---- bc2_io_ops_t ---- */
 
 /*
- * NOTE: the core calls this while s_core_mutex is held. A USB write may block up to ~20 ms, so a
- * host that stops reading delays core_task (keep-alive tick, button) by n * 20 ms for n queued
- * responses. The delay is bounded (writes time out and drop) and accepted for this version.
+ * The core calls these while s_core_mutex is held. They only queue the frame for the TX task and
+ * never block, so a host that stops reading cannot delay the keep-alive tick, the button or the
+ * safety stop. A full queue drops frames (counted by the queue).
  */
 static void io_write(void *ctx, const uint8_t *data, size_t len)
 {
     (void)ctx;
-    bc2_usb_write(data, len);
+    bc2_usb_enqueue(data, len, false);
+}
+
+/** Scan reports and notifications: refused when the queue is under pressure. */
+static bool io_write_droppable(void *ctx, const uint8_t *data, size_t len)
+{
+    (void)ctx;
+    return bc2_usb_enqueue(data, len, true);
 }
 
 static uint32_t io_now_us(void *ctx)
@@ -86,39 +103,54 @@ static void usb_task(void *param)
     }
 }
 
-/** Debounced button edge detector; returns true once per press. */
-static bool button_pressed_event(void)
+/**
+ * Debounced button edge detector; returns true once per press. Time based (not per call), because the
+ * core task now also runs between its 20 ms ticks when the GATT adapter wakes it.
+ */
+static bool button_pressed_event(uint32_t t_ms)
 {
-    static uint32_t low_ms;
+    static uint32_t low_since_ms;
+    static bool low;
     static bool fired;
     if (gpio_get_level(BC2_BOARD_BUTTON_GPIO) == 0) {        /* active low */
-        low_ms += CORE_PERIOD_MS;
+        if (!low) {
+            low = true;
+            low_since_ms = t_ms;
+        }
     } else {
-        low_ms = 0;
+        low = false;
         fired = false;
     }
-    if (low_ms >= BC2_BOARD_BUTTON_DEBOUNCE_MS && !fired) {
+    if (low && !fired && (uint32_t)(t_ms - low_since_ms) >= BC2_BOARD_BUTTON_DEBOUNCE_MS) {
         fired = true;
         return true;
     }
     return false;
 }
 
-/** Keep-alive supervision, asynchronous failures and the emergency button. */
+/** Called by the GATT adapter (NimBLE host task) after it queued an event: process it right away. */
+static void wake_core_task(void)
+{
+    if (s_core_task != NULL) {
+        xTaskNotifyGive(s_core_task);
+    }
+}
+
+/** Keep-alive supervision, GATT events and deadlines, asynchronous failures and the emergency button. */
 static void core_task(void *param)
 {
     (void)param;
     esp_task_wdt_add(NULL);
     for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CORE_PERIOD_MS));   /* event wake-up or 20 ms tick */
         xSemaphoreTake(s_core_mutex, portMAX_DELAY);
         const uint32_t t = now_ms();
         bc2_core_tick(&s_core, t);
-        if (button_pressed_event()) {
+        if (button_pressed_event(t)) {
             bc2_core_on_button(&s_core, t);
         }
         xSemaphoreGive(s_core_mutex);
         esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(CORE_PERIOD_MS));
     }
 }
 
@@ -157,12 +189,18 @@ void app_main(void)
 
     bc2_ble_init();
     bc2_usb_init();
-    const bc2_io_ops_t io = {.ctx = NULL, .write = io_write, .now_us = io_now_us,
-                             .hard_reset = io_hard_reset};
-    bc2_core_init(&s_core, bc2_ble_ops(), &io);
+    const bc2_gatt_ops_t *gatt_ops = NULL;                   /* NULL: build without GATT */
+#if CONFIG_BC2ADV_ENABLE_GATT
+    if (bc2_gatt_nimble_init(wake_core_task) == ESP_OK) {
+        gatt_ops = bc2_gatt_nimble_ops();
+    }
+#endif
+    const bc2_io_ops_t io = {.ctx = NULL, .write = io_write, .write_droppable = io_write_droppable,
+                             .now_us = io_now_us, .hard_reset = io_hard_reset};
+    bc2_core_init(&s_core, bc2_ble_ops(), gatt_ops, &io);
     vTaskDelay(pdMS_TO_TICKS(200));                          /* make the boot flash visible */
 
-    xTaskCreate(usb_task, "bc2_usb", 4096, NULL, 6, NULL);
-    xTaskCreate(core_task, "bc2_core", 4096, NULL, 5, NULL);
+    xTaskCreate(usb_task, "bc2_usb", 5120, NULL, 6, NULL);
+    xTaskCreate(core_task, "bc2_core", 6144, NULL, 5, &s_core_task);
     xTaskCreate(led_task, "bc2_led", 3072, NULL, 3, NULL);
 }
