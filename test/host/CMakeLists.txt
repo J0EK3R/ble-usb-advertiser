@@ -18,14 +18,22 @@ add_library(bc2_protocol STATIC
 target_include_directories(bc2_protocol PUBLIC ${COMP}/bc2_protocol/include)
 target_compile_options(bc2_protocol PRIVATE -Wall -Wextra -Werror -Wconversion)
 
+add_library(bc2_txq STATIC ${COMP}/bc2_txq/bc2_txq.c)
+target_include_directories(bc2_txq PUBLIC ${COMP}/bc2_txq/include)
+target_compile_options(bc2_txq PRIVATE -Wall -Wextra -Werror -Wconversion)
+
+add_library(bc2_scanfilter STATIC ${COMP}/bc2_scanfilter/bc2_scanfilter.c)
+target_include_directories(bc2_scanfilter PUBLIC ${COMP}/bc2_scanfilter/include)
+target_compile_options(bc2_scanfilter PRIVATE -Wall -Wextra -Werror -Wconversion)
+
 add_library(bc2_core STATIC ${COMP}/bc2_core/bc2_core.c)
 target_include_directories(bc2_core PUBLIC ${COMP}/bc2_core/include)
 target_link_libraries(bc2_core PUBLIC bc2_protocol)
 target_compile_options(bc2_core PRIVATE -Wall -Wextra -Werror -Wconversion)
 
 add_executable(bc2_tests
-    test_main.c test_crc.c test_framer.c test_codec.c test_gatt_codec.c test_core.c fake_ble.c)
-target_link_libraries(bc2_tests PRIVATE bc2_core)
+    test_main.c test_crc.c test_framer.c test_codec.c test_gatt_codec.c test_txq.c test_scanfilter.c test_core.c fake_ble.c)
+target_link_libraries(bc2_tests PRIVATE bc2_core bc2_txq bc2_scanfilter)
 target_compile_options(bc2_tests PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME bc2_tests COMMAND bc2_tests)
