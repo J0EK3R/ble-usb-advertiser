@@ -97,8 +97,8 @@ static void test_decode_connect(void)
     ASSERT_EQ(BC2_ADDR_TYPE_AUTO, r.addr_type);
     ASSERT_EQ(BC2_CONNECT_FLAG_BACKGROUND, r.flags);
     ASSERT_EQ(0, r.timeout_ms);                            /* background: no timeout */
-    ASSERT_EQ(12, r.itvl_min);                             /* 0/0 -> 15..30 ms */
-    ASSERT_EQ(24, r.itvl_max);
+    ASSERT_EQ(9, r.itvl_min);                              /* 0/0 -> 11.25..15 ms (fw 0.2.2) */
+    ASSERT_EQ(12, r.itvl_max);
     LOAD(fr, GV_CONNECT_EXPLICIT);
     ASSERT_EQ(BC2_OK, bc2_decode_connect(&fr, &r));
     ASSERT_EQ(2, r.conn_id);

@@ -271,8 +271,8 @@ static void test_connect_flow(void)
     ASSERT_EQ(2, c->conn_id);
     ASSERT_EQ(0x55, c->addr[5]);
     ASSERT_EQ(BC2_ADDR_TYPE_AUTO, c->mode);                /* auto is resolved by the adapter */
-    ASSERT_EQ(12, c->itvl_min);
-    ASSERT_EQ(24, c->itvl_max);
+    ASSERT_EQ(9, c->itvl_min);
+    ASSERT_EQ(12, c->itvl_max);
     ASSERT_EQ(5000, c->duration_ms);
     ASSERT_EQ(1, fake_out_count(&env));                    /* only the ACK so far */
 
