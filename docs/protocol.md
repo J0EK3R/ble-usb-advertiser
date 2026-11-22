@@ -415,7 +415,7 @@ All integers are little-endian. ACK extras: errors with status `ATT_ERROR` carry
 - `timeout_ms`: 0 = default 10000, ignored for background connects. The time counts from the request
   (waiting for a free initiator included).
 - `itvl_min` / `itvl_max`: connection interval in 1.25 ms units, 6..3200, `min <= max`; 0/0 = default
-  12 / 24 (15..30 ms). Slave latency 0 and supervision timeout 4 s are fixed. Peer requests to change the
+  9 / 12 (11.25..15 ms; fw 0.2.2, before 12 / 24: the controller used about the max, 30 ms, which doubled the latency of writes with response). Slave latency 0 and supervision timeout 4 s are fixed. Peer requests to change the
   parameters are accepted.
 - Errors: `BAD_PARAM`; `ALREADY_RUNNING` (`conn_id` in use, this address is already connected / connecting, or
   the old link of this id is still being torn down after a safety stop); `NO_RESOURCES` (`max_conns` ids
@@ -515,7 +515,7 @@ the old links (EVT_DISCONNECTED 0xF2) may still arrive; their `conn_id`s stay bu
 ### 17.2 Latency (targets, measured with `gatt-bench`)
 
 WRITE_CMD ACK < 5 ms, notification to USB frame < 10 ms, WRITE with response about 1-2 connection intervals
-plus 3 ms (so about 33-66 writes per second at 15-30 ms).
+plus 3 ms (so about 33-66 writes per second at 15-30 ms, 50-100 with the 0.2.2 defaults of 11.25-15 ms).
 
 ### 17.3 Safety rules (normative, extends section 7)
 
@@ -535,7 +535,7 @@ specific); SET_FAILSAFE is the mechanism to improve that.
 ### 17.4 Radio scheduling
 
 The controller time-slices scan, advertising (up to 5 sets at 20 ms) and the connection events itself. The
-defaults leave airtime: scan 100 ms interval / 50 ms window, connection interval 15..30 ms. BC2 should scan only
+defaults leave airtime: scan 100 ms interval / 50 ms window, connection interval 11.25..15 ms. BC2 should scan only
 while its scan page is open. Connect attempts are serialised (section 14, CONNECT).
 
 ## 18. Golden vectors 1.1

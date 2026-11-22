@@ -71,8 +71,8 @@ bool bc2_is_gatt_request(uint8_t type);
 #define BC2_SCAN_DEFAULT_REFRESH_MS 1000u
 #define BC2_SCAN_MAX_REFRESH_MS 10000u
 #define BC2_CONNECT_DEFAULT_TIMEOUT_MS 10000u
-#define BC2_CONNECT_DEFAULT_ITVL_MIN 12u  /**< 15 ms in 1.25 ms units */
-#define BC2_CONNECT_DEFAULT_ITVL_MAX 24u  /**< 30 ms */
+#define BC2_CONNECT_DEFAULT_ITVL_MIN 9u   /**< 11.25 ms in 1.25 ms units */
+#define BC2_CONNECT_DEFAULT_ITVL_MAX 12u  /**< 15 ms; the controller uses (about) the max, fw 0.2.1 with 24 gave 30 ms and slow writes */
 #define BC2_CONNECT_ITVL_LOWEST 6u        /**< 7.5 ms */
 #define BC2_CONNECT_ITVL_HIGHEST 3200u    /**< 4 s */
 #define BC2_ADDR_TYPE_AUTO 0xFFu          /**< CONNECT addr_type: use the type seen while scanning */

@@ -24,7 +24,7 @@ extern "C" {
 #define BC2_PROTO_MINOR 1      /**< Additive protocol changes bump this (1.1 = GATT central, docs/protocol.md 13+). */
 #define BC2_FW_MAJOR 0         /**< Firmware version reported in HELLO_RSP. */
 #define BC2_FW_MINOR 2
-#define BC2_FW_PATCH 1
+#define BC2_FW_PATCH 2
 
 /* ------------------------------------------------------------------------- */
 /* Framing constants                                                          */

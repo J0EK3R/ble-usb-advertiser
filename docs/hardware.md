@@ -43,7 +43,7 @@ product owner for version 1.
 - The controller runs scan, up to 5 advertising sets and the connection events itself (time slicing). One
   connect attempt can run at a time (NimBLE has a single initiator): the firmware queues CONNECT requests and
   works through them round robin (protocol section 14).
-- Scan defaults 100 ms interval / 50 ms window, connection interval 15..30 ms, slave latency 0, supervision timeout 4 s,
+- Scan defaults 100 ms interval / 50 ms window, connection interval 11.25..15 ms (fw 0.2.2; 15..30 ms before), slave latency 0, supervision timeout 4 s,
   ATT MTU requested by the stick 64 (a peer without MTU support keeps 23).
 - Only legacy advertising PDUs are reported (no BC2 device uses extended advertising).
 

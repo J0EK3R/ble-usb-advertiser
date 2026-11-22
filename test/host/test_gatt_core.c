@@ -100,7 +100,7 @@ static void test_hello_capabilities(void)
         ASSERT_EQ(32, fr.len);
         ASSERT_EQ(1, fr.payload[8]);                       /* proto minor */
         ASSERT_EQ(2, fr.payload[10]);                      /* fw minor 0.2.x */
-        ASSERT_EQ(1, fr.payload[11]);                      /* fw patch 0.2.1 */
+        ASSERT_EQ(2, fr.payload[11]);                      /* fw patch 0.2.2 */
         ASSERT_EQ(7, fr.payload[27]);                      /* scan | central | failsafe */
         ASSERT_EQ(MAXES[i], fr.payload[28]);
         ASSERT_EQ(56, fr.payload[29]);
